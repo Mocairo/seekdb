@@ -28,8 +28,6 @@ int ObTextDaaTIter::init(const ObTextDaaTParam &param)
   if (OB_ISNULL(param.base_param_) || OB_ISNULL(param.dim_iters_) || OB_ISNULL(param.allocator_)
       || OB_ISNULL(param.relevance_collector_)) {
     ret = OB_INVALID_ARGUMENT;
-    LOG_INFO("daat iter invalid param", K(ret), KP(param.base_param_), KP(param.dim_iters_),
-             KP(param.allocator_), KP(param.relevance_collector_));
   } else if (OB_FAIL(ObSRDaaTIterImpl::init(*param.base_param_, *param.dim_iters_,
                                             *param.allocator_, *param.relevance_collector_))) {
   } else if (param.base_param_->need_calc_relevance()
@@ -112,8 +110,9 @@ int ObTextBMWIter::init(const ObTextDaaTParam &param)
   if (OB_ISNULL(param.base_param_) || OB_ISNULL(param.dim_iters_) || OB_ISNULL(param.allocator_)
       || OB_ISNULL(param.relevance_collector_)) {
     ret = OB_INVALID_ARGUMENT;
-    LOG_WARN("bmw iter invalid param", K(ret), KP(param.base_param_), KP(param.dim_iters_),
-             KP(param.allocator_), KP(param.relevance_collector_));
+  } else if (!param.base_param_->need_calc_relevance()) {
+    // WAND pruning requires BM25 bounds even if scores are not projected.
+    ret = OB_INVALID_ARGUMENT;
   } else if (OB_FAIL(ObSRBMWIterImpl::init(*param.base_param_, *param.dim_iters_,
                                            *param.allocator_, *param.relevance_collector_))) {
   } else if (param.base_param_->need_calc_relevance()

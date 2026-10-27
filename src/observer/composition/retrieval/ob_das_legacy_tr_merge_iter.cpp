@@ -98,7 +98,6 @@ int ObDASLegacyTRMergeIter::inner_init(ObDASIterParam &param)
     inv_idx_tablet_switched_ = false;
     is_inited_ = true;
   }
-  LOG_INFO("legacy tr merge iter inner_init end", K(ret), K(flags_), K(query_tokens_.count()));
   return ret;
 }
 
@@ -246,7 +245,6 @@ int ObDASLegacyTRMergeIter::init_das_iter_scan_param(const ObTabletID &tablet_id
   int ret = OB_SUCCESS;
   if (OB_ISNULL(ctdef) || OB_ISNULL(rtdef)) {
     ret = OB_INVALID_ARGUMENT;
-    LOG_WARN("legacy init scan param invalid", K(ret), KP(ctdef), KP(rtdef));
   } else {
 
 
@@ -709,23 +707,15 @@ int ObDASLegacyTRMergeIter::gen_inv_idx_scan_one_range(const ObString &query_tok
 int ObDASLegacyTRMergeIter::do_table_scan()
 {
   int ret = OB_SUCCESS;
-  const bool calc_relevance = OB_NOT_NULL(ir_ctdef_) && ir_ctdef_->need_calc_relevance();
-  LOG_INFO("legacy tr merge iter do_table_scan begin", K(IS_NOT_INIT), K(IS_INIT),
-           K(function_lookup_mode_), K(topk_mode_), K(daat_mode_), K(taat_mode_),
-           K(query_tokens_.count()), KP(ir_ctdef_), K(children_cnt_), K(calc_relevance));
   if (IS_NOT_INIT) {
     ret = OB_NOT_INIT;
   } else {
     if (function_lookup_mode_) {
       // skip the following, which should have been done
     } else if (OB_FAIL(init_das_iter_scan_params())) {
-      LOG_INFO("legacy init_das_iter_scan_params failed", K(ret));
     } else if (OB_FAIL(create_dim_iters())) {
-      LOG_INFO("legacy create_dim_iters failed", K(ret));
     } else if (OB_FAIL(create_sparse_retrieval_iter())) {
-      LOG_INFO("legacy create_sparse_retrieval_iter failed", K(ret));
     } else if (OB_FAIL(set_children_iter_rangekey())) {
-      LOG_INFO("legacy set_children_iter_rangekey failed", K(ret));
     }
     if (OB_FAIL(ret)) {
     } else if (OB_UNLIKELY(!check_rangekey_inited_)) {
@@ -733,11 +723,9 @@ int ObDASLegacyTRMergeIter::do_table_scan()
     }
     for (int64_t i = 0; OB_SUCC(ret) && i < children_cnt_; ++i) {
       if (OB_FAIL(children_[i]->do_table_scan())) {
-        LOG_INFO("legacy child do_table_scan failed", K(ret), K(i), K(children_cnt_));
       }
     }
   }
-  LOG_INFO("legacy tr merge iter do_table_scan end", K(ret));
   return ret;
 }
 
@@ -907,9 +895,6 @@ int ObDASLegacyTRMergeIter::inner_get_next_rows(int64_t &count, int64_t capacity
     count = 0;
   } else {
     ret = sparse_retrieval_iter_->get_next_rows(capacity, count);
-    if (OB_FAIL(ret) && OB_ITER_END != ret) {
-      LOG_INFO("legacy sparse get_next_rows failed", K(ret), K(capacity), K(count));
-    }
   }
   return ret;
 }

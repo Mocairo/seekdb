@@ -47,6 +47,7 @@
 #include "query/vector/ob_vector_index_util.h"
 #include "sql/optimizer/ob_log_expand.h"
 #include "sql/resolver/ddl/ob_fts_index_builder_util.h"
+#include "sql/resolver/dml/ob_stmt_expr_visitor.h"
 #include "sql/optimizer/ob_log_insert.h"
 #include "sql/ob_sql_trans_control.h"
 
@@ -12167,55 +12168,26 @@ int ObLogPlan::prepare_text_retrieval_merge(const ObIArray<ObRawExpr *> &merge_m
   return ret;
 }
 
-static int check_match_score_used(ObExecContext *exec_ctx,
-                                  const ObDMLStmt *stmt,
+static int check_match_score_used(const ObDMLStmt *stmt,
                                   ObRawExpr *match_expr,
-                                  bool &need_calc,
-                                  ObIArray<ObExprConstraint> &constraints)
+                                  bool &need_calc)
 {
   int ret = OB_SUCCESS;
-  bool tmp_need = false;
   need_calc = false;
-  if (OB_ISNULL(exec_ctx) || OB_ISNULL(stmt) || OB_ISNULL(match_expr)) {
+  if (OB_ISNULL(stmt) || OB_ISNULL(match_expr)) {
     ret = OB_INVALID_ARGUMENT;
   } else {
-    if (stmt->is_select_stmt()) {
-      const ObSelectStmt *select_stmt = static_cast<const ObSelectStmt *>(stmt);
-      const ObIArray<SelectItem> &select_items = select_stmt->get_select_items();
-      for (int64_t i = 0; OB_SUCC(ret) && !need_calc && i < select_items.count(); ++i) {
-        tmp_need = false;
-        if (OB_FAIL(ObTransformUtils::inner_check_need_calc_match_score(
-                      exec_ctx, select_items.at(i).expr_, match_expr, tmp_need, constraints))) {
-        } else if (tmp_need) {
-          need_calc = true;
-        }
-      }
-      const ObIArray<OrderItem> &order_items = select_stmt->get_order_items();
-      for (int64_t i = 0; OB_SUCC(ret) && !need_calc && i < order_items.count(); ++i) {
-        tmp_need = false;
-        if (OB_FAIL(ObTransformUtils::inner_check_need_calc_match_score(
-                      exec_ctx, order_items.at(i).expr_, match_expr, tmp_need, constraints))) {
-        } else if (tmp_need) {
-          need_calc = true;
-        }
-      }
-      const ObIArray<ObRawExpr *> &group_exprs = select_stmt->get_group_exprs();
-      for (int64_t i = 0; OB_SUCC(ret) && !need_calc && i < group_exprs.count(); ++i) {
-        tmp_need = false;
-        if (OB_FAIL(ObTransformUtils::inner_check_need_calc_match_score(
-                      exec_ctx, group_exprs.at(i), match_expr, tmp_need, constraints))) {
-        } else if (tmp_need) {
-          need_calc = true;
-        }
-      }
-      const ObIArray<ObRawExpr *> &having_exprs = select_stmt->get_having_exprs();
-      for (int64_t i = 0; OB_SUCC(ret) && !need_calc && i < having_exprs.count(); ++i) {
-        tmp_need = false;
-        if (OB_FAIL(ObTransformUtils::inner_check_need_calc_match_score(
-                      exec_ctx, having_exprs.at(i), match_expr, tmp_need, constraints))) {
-        } else if (tmp_need) {
-          need_calc = true;
-        }
+    // A boolean comparison is still an observable value in SELECT, GROUP BY,
+    // ORDER BY, HAVING, join conditions, etc. Only a standalone WHERE predicate
+    // can be satisfied by the matching document IDs without evaluating a score.
+    ObSEArray<ObRawExpr *, 16> value_exprs;
+    ObStmtExprGetter visitor;
+    visitor.set_relation_scope();
+    visitor.remove_scope(SCOPE_WHERE);
+    if (OB_FAIL(stmt->get_relation_exprs(value_exprs, visitor))) {
+    }
+    for (int64_t i = 0; OB_SUCC(ret) && !need_calc && i < value_exprs.count(); ++i) {
+      if (OB_FAIL(ObRawExprUtils::find_expr(value_exprs.at(i), match_expr, need_calc))) {
       }
     }
     const ObIArray<ObRawExpr *> &conditions = stmt->get_condition_exprs();
@@ -12224,13 +12196,13 @@ static int check_match_score_used(ObExecContext *exec_ctx,
       if (condition == match_expr) {
         // A bare MATCH in WHERE is a boolean filter. The scan result already
         // identifies matching docs, so the relevance score is not needed.
-      } else {
-        tmp_need = false;
-        if (OB_FAIL(ObTransformUtils::inner_check_need_calc_match_score(
-                      exec_ctx, condition, match_expr, tmp_need, constraints))) {
-        } else if (tmp_need) {
-          need_calc = true;
-        }
+      } else if (OB_ISNULL(condition)) {
+        ret = OB_ERR_UNEXPECTED;
+      } else if (condition->get_expr_type() == T_OP_BOOL
+                  && condition->get_param_count() == 1
+                  && condition->get_param_expr(0) == match_expr) {
+        // The resolver's boolean wrapper has the same scan-only semantics.
+      } else if (OB_FAIL(ObRawExprUtils::find_expr(condition, match_expr, need_calc))) {
       }
     }
   }
@@ -12254,7 +12226,6 @@ int ObLogPlan::prepare_text_retrieval_info(const uint64_t ref_table_id,
   uint64_t inv_idx_tid = OB_INVALID_ID;
   ObSEArray<ObAuxTableMetaInfo, 4> index_infos;
   bool need_calc_relevance = false;
-  ObSEArray<ObExprConstraint, 2> constraints;
   uint64_t docid_col_id = OB_INVALID_ID;
   if (OB_ISNULL(match_against) || OB_ISNULL(get_stmt()) || OB_ISNULL(get_optimizer_context().get_query_ctx())) {
     ret = OB_INVALID_ARGUMENT;
@@ -12325,11 +12296,9 @@ int ObLogPlan::prepare_text_retrieval_info(const uint64_t ref_table_id,
     bool score_used = false;
     if (OB_ISNULL(query_ctx)) {
       ret = OB_ERR_UNEXPECTED;
-    } else if (OB_FAIL(check_match_score_used(get_optimizer_context().get_exec_ctx(),
-                                              get_stmt(),
+    } else if (OB_FAIL(check_match_score_used(get_stmt(),
                                               match_against,
-                                              score_used,
-                                              constraints))) {
+                                              score_used))) {
       LOG_WARN("failed to check need calc match score, fallback to calc", K(ret));
       need_calc_relevance = true;
       ret = OB_SUCCESS;
@@ -12337,9 +12306,6 @@ int ObLogPlan::prepare_text_retrieval_info(const uint64_t ref_table_id,
       // Boolean mode needs the match result to evaluate the boolean filter,
       // so relevance has to be calculated even when the score is not selected.
       need_calc_relevance = score_used || BOOLEAN_MODE == match_against->get_mode_flag();
-      if (!need_calc_relevance &&
-          OB_FAIL(append_array_no_dup(query_ctx->all_expr_constraints_, constraints))) {
-      }
     }
     tr_info.match_expr_ = match_against;
     tr_info.inv_idx_tid_ = inv_idx_tid;

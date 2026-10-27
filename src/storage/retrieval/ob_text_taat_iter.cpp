@@ -64,7 +64,9 @@ void ObTextTaaTIter::reuse(const bool switch_tablet)
 int ObTextTaaTIter::pre_process()
 {
   int ret = OB_SUCCESS;
-  if (iter_param_->need_calc_relevance()) {
+  if (query_tokens_->empty()) {
+    ret = OB_ITER_END;
+  } else if (iter_param_->need_calc_relevance()) {
     const bool is_first_estimation = !bm25_param_estimator_.is_estimated();
     if (!is_first_estimation) {
       // skip
@@ -73,6 +75,11 @@ int ObTextTaaTIter::pre_process()
       const int64_t total_doc_cnt = bm25_param_estimator_.get_total_doc_cnt();
       partition_cnt_ = MIN((total_doc_cnt-1) / OB_HASHMAP_DEFAULT_SIZE + 1, OB_MAX_HASHMAP_COUNT);
     }
+  } else if (partition_cnt_ == 0) {
+    // Without BM25 estimation the document count is unknown. Use the existing
+    // partition limit to avoid putting a large result set into one hash map.
+    // This preserves partition-at-a-time deduplication without doc-agg scans.
+    partition_cnt_ = OB_MAX_HASHMAP_COUNT;
   }
   return ret;
 }
