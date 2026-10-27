@@ -8,7 +8,8 @@ $RepoRoot = (Resolve-Path (Join-Path $ParserDir "../../..")).Path
 $DevToolsBin = Join-Path $RepoRoot "deps/3rd/usr/local/oceanbase/devtools/bin"
 $BisonShare = Join-Path $RepoRoot "deps/3rd/usr/local/oceanbase/devtools/share/bison"
 
-$env:PATH = "$DevToolsBin;$env:PATH"
+$BundledParserTools = Join-Path $RepoRoot "deps/3rd/tools/win_flex_bison"
+$env:PATH = "$DevToolsBin;$BundledParserTools;$env:PATH"
 if (Test-Path $BisonShare) { $env:BISON_PKGDATADIR = $BisonShare }
 
 $BISON_BIN = "win_bison"

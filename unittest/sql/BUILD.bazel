@@ -1,0 +1,26 @@
+load("//bazel:defs.bzl", "seekdb_module_cc_test")
+
+seekdb_module_cc_test(
+    name = "sql_tests",
+    srcs = [
+        "engine/basic/test_file_scan_utils.cpp",
+        "engine/expr/ob_expr_ai_prompt_test.cpp",
+        "engine/expr/test_ob_openai_utils.cpp",
+        "parser/test_file_sql_parser.cpp",
+    ],
+    test_hdrs = ["engine/expr/ai_test_support.h"],
+    data = [
+        "engine/basic/data/plain.parquet.b64",
+        "engine/basic/data/dictionary.parquet.b64",
+        "engine/basic/data/v2.parquet.b64",
+        "engine/basic/data/empty.parquet.b64",
+    ],
+    module_interface = "//src/sql:sql_unit_test_interface",
+    shard_count = 1,
+    unity_exceptions = {
+        "engine/basic/test_file_scan_utils.cpp": "Keep the portable scanner acceptance harness isolated.",
+        "engine/expr/ob_expr_ai_prompt_test.cpp": "Keep AI utility test fixtures separate from other test translation units.",
+        "engine/expr/test_ob_openai_utils.cpp": "Keep AI provider fixtures separate from other test translation units.",
+        "parser/test_file_sql_parser.cpp": "Parser acceptance uses its own local allocator per query.",
+    },
+)

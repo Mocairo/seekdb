@@ -96,6 +96,7 @@ private:
                                 uint64_t &show_tg_id,
                                 ObString &show_table_name);
   int parse_and_resolve_select_sql(const common::ObString &select_sql);
+  int resolve_describe_select(const ParseNode &select_node);
   int resolve_like_or_where_clause(ObShowResolverContext &ctx);
   int replace_where_clause(ParseNode* expr_node, const ObShowResolverContext &show_resv_ctx);
   int process_select_type(

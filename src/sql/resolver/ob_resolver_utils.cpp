@@ -1,3 +1,4 @@
+#include "sql/engine/basic/ob_file_sql_bridge.h"
 /*
  * Copyright (c) 2025 OceanBase.
  *
@@ -120,6 +121,19 @@ int ObResolverUtils::get_all_function_table_column_names(const TableItem &table_
                                                          ObResolverParams &params,
                                                          ObIArray<ObString> &column_names)
 {
+  if (is_file_sql_expression(table_item.function_table_expr_)) {
+    int ret = OB_SUCCESS;
+    try {
+      const ObString encoded = static_cast<ObConstRawExpr *>(table_item.function_table_expr_)->get_value().get_string();
+      const auto spec = file_sql::Spec::decode(std::string(encoded.ptr(), encoded.length()));
+      for (const auto &column : spec.columns) {
+        ObString name;
+        OZ(ob_write_string(*params.allocator_, ObString(int32_t(column.name.size()), column.name.data()), name));
+        OZ(column_names.push_back(name));
+      }
+    } catch (const std::exception &e) { ret = OB_INVALID_ARGUMENT; LOG_USER_ERROR(OB_INVALID_ARGUMENT, e.what()); }
+    return ret;
+  }
   int ret = OB_SUCCESS;
   ObRawExpr *table_expr = NULL;
   ObPLPackageGuard *package_guard = nullptr;

@@ -384,6 +384,7 @@ END_P SET_VAR DELIMITER
 %type <node> date_unit date_params timestamp_params
 %type <node> drop_table_stmt table_list drop_view_stmt table_or_tables
 %type <node> explain_stmt explainable_stmt format_name kill_stmt create_outline_stmt alter_outline_stmt drop_outline_stmt opt_outline_target
+%type <node> copy_stmt copy_source opt_copy_options copy_options copy_option copy_option_value
 %type <node> expr_list expr expr_const conf_const simple_expr simple_expr_list expr_or_default bit_expr bool_pri predicate explain_or_desc pl_expr_stmt
 %type <node> column_ref multi_delete_table
 %type <node> case_expr func_expr in_expr sub_query_flag search_expr
@@ -497,6 +498,7 @@ END_P SET_VAR DELIMITER
 %type <node> dynamic_sampling_hint
 %type <node> skip_index_type opt_skip_index_type_list
 %type <node> vec_index_params vec_index_param vec_index_param_value opt_with_vector_index_parameters
+%type <node> file_table_expr
 %type <node> json_table_expr unnest_expr mock_jt_on_error_on_empty jt_column_list json_table_column_def
 %type <node> json_table_ordinality_column_def json_table_exists_column_def json_table_value_column_def json_table_nested_column_def
 %type <node> opt_value_on_empty_or_error_or_mismatch opt_on_mismatch
@@ -556,6 +558,7 @@ opt_end_p:
 /* only preparable statement will set question mark size */
 stmt:
     select_stmt             { $$ = $1; question_mark_issue($$, result); }
+  | copy_stmt               { $$ = $1; question_mark_issue($$, result); }
   | insert_stmt             { $$ = $1; question_mark_issue($$, result); }
   | create_table_stmt       {
     $$ = $1;
@@ -8903,6 +8906,62 @@ LIMIT limit_expr OFFSET limit_expr
 }
 ;
 
+copy_stmt:
+COPY copy_source TO STRING_VALUE opt_copy_options
+{
+  if ($2->children_[PARSE_SELECT_INTO] != NULL ||
+      $2->children_[PARSE_SELECT_INTO_EXTRA] != NULL) {
+    yyerror(&@2, result, "COPY source must not contain INTO");
+    YYABORT_PARSE_SQL_ERROR;
+  }
+  ParseNode *into_node = NULL;
+  malloc_non_terminal_node(into_node, result->malloc_pool_, T_INTO_OUTFILE, 2, $4, $5);
+  into_node->value_ = 1701;
+  $$ = $2;
+  $$->children_[PARSE_SELECT_INTO_EXTRA] = into_node;
+}
+;
+
+copy_source:
+relation_factor
+{
+  ParseNode *star = NULL, *project = NULL, *from = NULL;
+  malloc_terminal_node(star, result->malloc_pool_, T_STAR);
+  malloc_non_terminal_node(project, result->malloc_pool_, T_PROJECT_STRING, 1, star);
+  dup_string_to_node(project, result->malloc_pool_, "*");
+  merge_nodes(project, result, T_PROJECT_LIST, project);
+  merge_nodes(from, result, T_FROM_LIST, $1);
+  malloc_select_node($$, result->malloc_pool_);
+  $$->children_[PARSE_SELECT_SELECT] = project;
+  $$->children_[PARSE_SELECT_FROM] = from;
+}
+| '(' select_stmt ')'
+{
+  $$ = $2;
+}
+;
+opt_copy_options:
+/* empty */ { $$ = NULL; }
+| '(' copy_options ')' { merge_nodes($$, result, T_EXPR_LIST, $2); }
+;
+copy_options:
+copy_option { $$ = $1; }
+| copy_options ',' copy_option { malloc_non_terminal_node($$, result->malloc_pool_, T_LINK_NODE, 2, $1, $3); }
+;
+copy_option:
+relation_name
+{
+  ParseNode *flag = NULL; malloc_terminal_node(flag, result->malloc_pool_, T_BOOL); flag->value_ = 1;
+  malloc_non_terminal_node($$, result->malloc_pool_, T_OP_EQ, 2, $1, flag);
+}
+| relation_name copy_option_value { malloc_non_terminal_node($$, result->malloc_pool_, T_OP_EQ, 2, $1, $2); }
+| relation_name COMP_EQ copy_option_value { malloc_non_terminal_node($$, result->malloc_pool_, T_OP_EQ, 2, $1, $3); }
+;
+copy_option_value:
+literal { $$ = $1; }
+| relation_name { $$ = $1; }
+;
+
 into_clause:
 INTO OUTFILE STRING_VALUE opt_charset field_opt line_opt file_opt
 {
@@ -10844,6 +10903,10 @@ tbl_name
 {
   $$ = $1;
 }
+| file_table_expr
+{
+  $$ = $1;
+}
 | hybrid_search_expr
 {
   $$ = $1;
@@ -12265,7 +12328,17 @@ explain_or_desc relation_factor opt_desc_column_option
   malloc_non_terminal_node($$, result->malloc_pool_, T_SHOW_COLUMNS, 4, $$, $2, NULL, $3);
 }
 
-| explain_or_desc explainable_stmt { GEN_EXPLAN_STMT($1, $$, 0, 0, $2, NULL, NULL);}
+| explain_or_desc explainable_stmt
+{
+  if ($1 != NULL && $2->type_ == T_SELECT) {
+    ParseNode *describe = NULL;
+    malloc_terminal_node(describe, result->malloc_pool_, T_INT);
+    describe->value_ = 1701;
+    malloc_non_terminal_node($$, result->malloc_pool_, T_SHOW_COLUMNS, 4, describe, $2, NULL, NULL);
+  } else {
+    GEN_EXPLAN_STMT($1, $$, 0, 0, $2, NULL, NULL);
+  }
+}
 | explain_or_desc PRETTY explainable_stmt { GEN_EXPLAN_STMT($1, $$, 0, T_PRETTY, $3, NULL, NULL);}
 | explain_or_desc PRETTY_COLOR explainable_stmt { GEN_EXPLAN_STMT($1, $$, 0, T_PRETTY_COLOR, $3, NULL, NULL);}
 
@@ -12306,8 +12379,8 @@ explain_or_desc relation_factor opt_desc_column_option
 
 explain_or_desc:
 EXPLAIN {$$ = NULL;}
-| DESCRIBE {$$ = NULL;}
-| DESC  {$$ = NULL;}
+| DESCRIBE { malloc_terminal_node($$, result->malloc_pool_, T_INT); $$->value_ = 1; }
+| DESC { malloc_terminal_node($$, result->malloc_pool_, T_INT); $$->value_ = 1; }
 ;
 
 explainable_stmt:
@@ -17425,6 +17498,33 @@ JSON '(' column_name ')' STORE AS '(' lob_storage_parameters ')'
   ParseNode *params = NULL;
   merge_nodes(params, result, T_ARGUMENT_LIST, $8);
   malloc_non_terminal_node($$, result->malloc_pool_, T_LOB_STORAGE_CLAUSE, 3, type_node, $3, params);
+}
+;
+
+file_table_expr:
+NAME_OB '(' expr_list ')' %prec LOWER_PARENS
+{
+  ParseNode *args = NULL, *call = NULL;
+  args = $3;
+  malloc_non_terminal_node(call, result->malloc_pool_, T_FUN_SYS, 2, $1, args);
+  malloc_non_terminal_node($$, result->malloc_pool_, T_TABLE_COLLECTION_EXPRESSION, 2, call, NULL);
+  $$->value_ = 1701;
+}
+| NAME_OB '(' expr_list ')' relation_name
+{
+  ParseNode *args = NULL, *call = NULL;
+  args = $3;
+  malloc_non_terminal_node(call, result->malloc_pool_, T_FUN_SYS, 2, $1, args);
+  malloc_non_terminal_node($$, result->malloc_pool_, T_TABLE_COLLECTION_EXPRESSION, 2, call, $5);
+  $$->value_ = 1701;
+}
+| NAME_OB '(' expr_list ')' AS relation_name
+{
+  ParseNode *args = NULL, *call = NULL;
+  args = $3;
+  malloc_non_terminal_node(call, result->malloc_pool_, T_FUN_SYS, 2, $1, args);
+  malloc_non_terminal_node($$, result->malloc_pool_, T_TABLE_COLLECTION_EXPRESSION, 2, call, $6);
+  $$->value_ = 1701;
 }
 ;
 

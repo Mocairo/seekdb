@@ -1,3 +1,4 @@
+#include "sql/engine/basic/ob_file_sql_bridge.h"
 /*
  * Copyright (c) 2025 OceanBase.
  *
@@ -3940,7 +3941,15 @@ int ObDMLResolver::resolve_function_table_item(const ParseNode &parse_tree,
   }
   if (OB_SUCC(ret)) {
     OX (params_.is_resolve_table_function_expr_ = true);
-    OZ (resolve_sql_expr(*(parse_tree.children_[0]), function_table_expr));
+    if (parse_tree.value_ == 1701) {
+      OZ (bind_file_sql_expression(params_, *parse_tree.children_[0], function_table_expr));
+    } else {
+      OZ (resolve_sql_expr(*(parse_tree.children_[0]), function_table_expr));
+      if (OB_SUCC(ret) && is_file_sql_expression(function_table_expr)) {
+        ret = OB_NOT_SUPPORTED;
+        LOG_USER_ERROR(OB_NOT_SUPPORTED, "file scan descriptors must originate from read_* or glob");
+      }
+    }
     OX (params_.is_resolve_table_function_expr_ = false);
     CK (OB_NOT_NULL(function_table_expr));
     OX (alias_node = parse_tree.children_[1]);
@@ -7632,6 +7641,38 @@ int ObDMLResolver::resolve_function_table_column_item_sys_func(const TableItem &
   CK (OB_NOT_NULL(table_expr = table_item.function_table_expr_));
   OZ (table_expr->deduce_type(session_info_));
   if (OB_FAIL(ret)) { // do nothing ...
+  } else if (is_file_sql_expression(table_expr)) {
+    try {
+      const ObString encoded = static_cast<ObConstRawExpr *>(table_expr)->get_value().get_string();
+      const auto spec = file_sql::Spec::decode(std::string(encoded.ptr(), encoded.length()));
+      for (size_t i = 0; OB_SUCC(ret) && i < spec.columns.size(); ++i) {
+        const auto &column = spec.columns[i];
+        common::ObObjMeta meta;
+        switch (column.type) {
+          case file_sql::Type::NIL: meta.set_null(); break;
+          case file_sql::Type::BIGINT: meta.set_int(); break;
+          case file_sql::Type::DOUBLE: meta.set_double(); break;
+          case file_sql::Type::BOOLEAN: meta.set_tinyint(); break;
+          case file_sql::Type::DATE: meta.set_date(); break;
+          case file_sql::Type::DATETIME: meta.set_datetime(); break;
+          default: meta.set_varchar(); meta.set_collation_type(CS_TYPE_UTF8MB4_BIN); meta.set_collation_level(CS_LEVEL_IMPLICIT); break;
+        }
+        ObString name;
+        ObAccuracy accuracy(ObAccuracy::DDL_DEFAULT_ACCURACY[meta.get_type()]);
+        if (meta.is_varchar()) accuracy.set_length(file_sql::MAX_RECORD_BYTES);
+        if (meta.is_datetime()) accuracy.set_scale(column.scale);
+        OZ (ob_write_string(*allocator_, ObString(int32_t(column.name.size()), column.name.data()), name));
+        col_item = stmt->get_column_item_by_id(table_item.table_id_, OB_APP_MIN_COLUMN_ID + i);
+        if (col_item == nullptr) {
+          OZ (resolve_function_table_column_item(table_item, meta, accuracy, name, OB_APP_MIN_COLUMN_ID + i, col_item));
+        }
+        if (OB_SUCC(ret)) {
+          if (!column.nullable) col_item->expr_->set_result_flag(NOT_NULL_FLAG);
+          OZ (col_items.push_back(*col_item));
+        }
+      }
+    } catch (const std::exception &e) { ret = OB_INVALID_ARGUMENT; LOG_USER_ERROR(OB_INVALID_ARGUMENT, e.what()); }
+    return ret;
   } else if (!ObResolverUtils::is_expr_can_be_used_in_table_function(*table_expr)) {
     ret = OB_NOT_SUPPORTED;
     LOG_USER_ERROR(OB_NOT_SUPPORTED, "access rows from a non-nested table item");

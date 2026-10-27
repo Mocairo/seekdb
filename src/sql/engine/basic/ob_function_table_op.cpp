@@ -18,6 +18,11 @@
 
 #include "sql/engine/basic/ob_function_table_op.h"
 #include "sql/engine/ob_exec_context.h"
+#include "sql/engine/basic/ob_file_sql_bridge.h"
+#include "common/timezone/ob_time_convert.h"
+#include <charconv>
+#include <sstream>
+#include <locale>
 #include "sql/engine/expr/ob_expr_lob_utils.h"
 
 
@@ -27,14 +32,16 @@ using namespace common;
 namespace sql
 {
 
-OB_SERIALIZE_MEMBER((ObFunctionTableSpec, ObOpSpec), value_expr_, column_exprs_, has_correlated_expr_);
+OB_SERIALIZE_MEMBER((ObFunctionTableSpec, ObOpSpec), value_expr_, column_exprs_, has_correlated_expr_, file_spec_, file_column_ids_);
 
 int ObFunctionTableOp::inner_open()
 {
   int ret = OB_SUCCESS;
   node_idx_ = 0;
   already_calc_ = false;
-  if (OB_ISNULL(MY_SPEC.value_expr_)) {
+  if (!MY_SPEC.file_spec_.empty()) {
+    return open_file();
+  } else if (OB_ISNULL(MY_SPEC.value_expr_)) {
     ret = OB_ERR_UNEXPECTED;
   } else if (ObExtendType == MY_SPEC.value_expr_->datum_meta_.type_) {
     next_row_func_ = &ObFunctionTableOp::inner_get_next_row_udf;
@@ -50,6 +57,7 @@ int ObFunctionTableOp::inner_rescan()
   if (OB_FAIL(ObOperator::inner_rescan())) {
   } else {
     node_idx_ = 0;
+    if (!MY_SPEC.file_spec_.empty()) return open_file();
     if (MY_SPEC.has_correlated_expr_) {
       row_count_ = 0;
       col_count_ = 0;
@@ -63,6 +71,9 @@ int ObFunctionTableOp::inner_rescan()
 int ObFunctionTableOp::inner_close()
 {
   int ret = OB_SUCCESS;
+  file_reader_.reset();
+  file_names_.clear();
+  file_row_allocator_.reset();
   node_idx_ = 0;
   row_count_ = 0;
   col_count_ = 0;
@@ -72,6 +83,13 @@ int ObFunctionTableOp::inner_close()
 
 void ObFunctionTableOp::destroy()
 {
+  file_reader_.reset();
+  std::vector<std::string>().swap(file_names_);
+  // Operators are arena allocated and destroy() does not invoke member
+  // destructors. Swap ownership out so standard-library allocations are freed.
+  file_sql::Spec empty;
+  std::swap(file_spec_, empty);
+  file_row_allocator_.reset();
   ObOperator::destroy();
 }
 
@@ -216,6 +234,117 @@ int ObFunctionTableOp::inner_get_next_row_sys_func()
   return ret;
 }
 
+
+int ObFunctionTableOp::open_file()
+{
+  int ret = OB_SUCCESS;
+  std::string root;
+  if (ctx_.get_my_session() == nullptr) return OB_ERR_UNEXPECTED;
+  if (OB_FAIL(check_file_sql_access(*ctx_.get_my_session(), root))) return ret;
+  try {
+    file_spec_ = file_sql::Spec::decode(std::string(MY_SPEC.file_spec_.ptr(), MY_SPEC.file_spec_.length()));
+    file_spec_.secure_root = root;
+    node_idx_ = 0;
+    file_reader_.reset();
+    if (file_spec_.options.format == "glob") file_names_ = file_sql::discover(file_spec_.path, root);
+    else {
+      std::vector<size_t> projection;
+      for (int64_t i = 0; i < MY_SPEC.file_column_ids_.count(); ++i) projection.push_back(MY_SPEC.file_column_ids_.at(i));
+      // COUNT(*) still advances one source column, without materializing rows.
+      if (projection.empty()) projection.push_back(0);
+      file_reader_.reset(new file_sql::Reader(file_spec_));
+      file_reader_->open(projection);
+    }
+    next_row_func_ = &ObFunctionTableOp::inner_get_next_row_file;
+  } catch (const std::exception &e) {
+    ret = OB_INVALID_ARGUMENT; LOG_USER_ERROR(OB_INVALID_ARGUMENT, e.what());
+    file_reader_.reset();
+  }
+  return ret;
+}
+
+int ObFunctionTableOp::write_file_row(const std::vector<file_sql::Cell> &row)
+{
+  int ret = OB_SUCCESS;
+  for (int64_t i = 0; OB_SUCC(ret) && i < MY_SPEC.column_exprs_.count(); ++i) {
+    const auto &cell = row.at(i);
+    ObExpr *expr = MY_SPEC.column_exprs_.at(i);
+    ObDatum &datum = expr->locate_datum_for_write(eval_ctx_);
+    const auto type = file_spec_.columns.at(MY_SPEC.file_column_ids_.at(i)).type;
+    if (cell.null || type == file_sql::Type::NIL) datum.set_null();
+    else if (type == file_sql::Type::BIGINT) {
+      int64_t n = 0; const char *first = cell.text.data() + (cell.text[0] == '+');
+      auto parsed = std::from_chars(first, cell.text.data() + cell.text.size(), n);
+      if (parsed.ec != std::errc() || parsed.ptr != cell.text.data() + cell.text.size()) ret = OB_INVALID_ARGUMENT;
+      else datum.set_int(n);
+    } else if (type == file_sql::Type::DOUBLE) {
+      double value; std::istringstream in(cell.text); in.imbue(std::locale::classic());
+      in >> std::noskipws >> value;
+      if (!in || !in.eof() || !std::isfinite(value)) ret = OB_INVALID_ARGUMENT;
+      else datum.set_double(value);
+    }
+    else if (type == file_sql::Type::BOOLEAN) datum.set_int(cell.text == "true" || cell.text == "TRUE");
+    else if (type == file_sql::Type::DATE) {
+      int32_t date = 0;
+      if (OB_FAIL(ObTimeConverter::str_to_date(ObString(int32_t(cell.text.size()), cell.text.data()), date))) {}
+      else datum.set_date(date);
+    } else if (type == file_sql::Type::DATETIME) {
+      int64_t datetime = 0; ObTimeConvertCtx cvrt(nullptr, false);
+      if (OB_FAIL(ObTimeConverter::str_to_datetime(ObString(int32_t(cell.text.size()), cell.text.data()), cvrt, datetime))) {}
+      else datum.set_datetime(datetime);
+    } else {
+      char *copy = static_cast<char *>(file_row_allocator_.alloc(std::max<size_t>(cell.text.size(), 1)));
+      if (copy == nullptr) ret = OB_ALLOCATE_MEMORY_FAILED;
+      else { MEMCPY(copy, cell.text.data(), cell.text.size()); datum.set_string(copy, int32_t(cell.text.size())); }
+    }
+    if (OB_SUCC(ret)) expr->set_evaluated_projected(eval_ctx_);
+  }
+  return ret;
+}
+
+int ObFunctionTableOp::inner_get_next_row_file()
+{
+  int ret = OB_SUCCESS;
+  if (OB_FAIL(ctx_.check_status())) return ret;
+  clear_evaluated_flag(); file_row_allocator_.reuse();
+  try {
+    std::vector<file_sql::Cell> row;
+    if (file_spec_.options.format == "glob") {
+      if (size_t(node_idx_) >= file_names_.size()) return OB_ITER_END;
+      row.emplace_back(file_names_[node_idx_++]);
+    } else if (!file_reader_->next(row)) return OB_ITER_END;
+    ret = write_file_row(row);
+  } catch (const std::exception &e) { ret = OB_INVALID_ARGUMENT; LOG_USER_ERROR(OB_INVALID_ARGUMENT, e.what()); }
+  return ret;
+}
+
+int ObFunctionTableOp::inner_get_next_batch(const int64_t max_row_cnt)
+{
+  if (MY_SPEC.file_spec_.empty()) return ObOperator::inner_get_next_batch(max_row_cnt);
+  int ret = OB_SUCCESS; clear_evaluated_flag(); file_row_allocator_.reuse();
+  brs_.size_ = 0; brs_.end_ = false;
+  const int64_t capacity = MIN(max_row_cnt, MY_SPEC.max_batch_size_);
+  if (capacity <= 0) return OB_INVALID_ARGUMENT;
+  brs_.skip_->reset(capacity);
+  ObEvalCtx::BatchInfoScopeGuard guard(eval_ctx_); guard.set_batch_size(capacity);
+  try {
+    size_t bytes = 0;
+    while (OB_SUCC(ret) && brs_.size_ < capacity && bytes < 1024 * 1024) {
+      if (OB_FAIL(ctx_.check_status())) break;
+      std::vector<file_sql::Cell> row;
+      if (file_spec_.options.format == "glob") {
+        if (size_t(node_idx_) >= file_names_.size()) { brs_.end_ = true; break; }
+        row.emplace_back(file_names_[node_idx_++]);
+      } else if (!file_reader_->next(row)) { brs_.end_ = true; break; }
+      guard.set_batch_idx(brs_.size_);
+      for (const auto &cell : row) bytes += cell.text.size();
+      if (OB_FAIL(write_file_row(row))) break;
+      for (auto *expr : MY_SPEC.column_exprs_) expr->get_evaluated_flags(eval_ctx_).set(brs_.size_);
+      ++brs_.size_;
+    }
+  } catch (const std::exception &e) { ret = OB_INVALID_ARGUMENT; LOG_USER_ERROR(OB_INVALID_ARGUMENT, e.what()); }
+  return ret;
+}
 
 } // end namespace sql
 } // end namespace oceanbase

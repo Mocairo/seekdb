@@ -20,6 +20,7 @@
 #include <memory>
 
 #include "ob_select_into_op.h"
+#include "sql/engine/basic/ob_file_sql_bridge.h"
 #include "sql/engine/cmd/ob_variable_set_executor.h"
 #include "lib/charset/ob_charset_string_helper.h"
 #include "sql/engine/px/ob_px_sqc_handler.h"
@@ -38,11 +39,12 @@ OB_SERIALIZE_MEMBER(ObSelectIntoOpInput, task_id_, sqc_id_);
 OB_SERIALIZE_MEMBER((ObSelectIntoSpec, ObOpSpec), into_type_, user_vars_, outfile_name_,
     field_str_, line_str_, closed_cht_, is_optional_, select_exprs_, is_single_, max_file_size_,
     escaped_cht_, cs_type_, parallel_, buffer_size_, is_overwrite_,
-    external_properties_);
+    external_properties_, file_copy_spec_);
 
 
 int ObSelectIntoOp::inner_open()
 {
+  if (!MY_SPEC.file_copy_spec_.empty()) return open_file_copy();
   int ret = OB_SUCCESS;
   ObSQLSessionInfo *session = NULL;
   if (OB_ISNULL(session = ctx_.get_my_session())) {
@@ -188,6 +190,7 @@ int ObSelectIntoOp::calc_outfile_path()
 }
 int ObSelectIntoOp::inner_get_next_row()
 {
+  if (!MY_SPEC.file_copy_spec_.empty()) return execute_file_copy(false, 1);
   int ret = 0 == top_limit_cnt_ ? OB_ITER_END : OB_SUCCESS;
   int64_t row_count = 0;
   const ObItemType into_type = MY_SPEC.into_type_;
@@ -236,6 +239,7 @@ int ObSelectIntoOp::inner_get_next_row()
 
 int ObSelectIntoOp::inner_get_next_batch(const int64_t max_row_cnt)
 {
+  if (!MY_SPEC.file_copy_spec_.empty()) return execute_file_copy(true, max_row_cnt);
   int ret = OB_SUCCESS;
   const ObBatchRows *child_brs = NULL;
   int64_t batch_size = min(max_row_cnt, MY_SPEC.max_batch_size_);
@@ -324,6 +328,7 @@ int ObSelectIntoOp::inner_rescan()
 
 int ObSelectIntoOp::inner_close()
 {
+  file_copy_writer_.reset();
   int ret = OB_SUCCESS;
   if (OB_NOT_NULL(data_writer_) && OB_FAIL(data_writer_->close_data_writer())) {
   }
@@ -1275,11 +1280,106 @@ int ObSelectIntoOp::new_data_writer(ObExternalFileWriter *&data_writer)
 
 void ObSelectIntoOp::destroy()
 {
+  file_copy_writer_.reset();
+  std::vector<char>().swap(file_copy_buffer_);
   if (OB_NOT_NULL(data_writer_)) {
     data_writer_->~ObExternalFileWriter();
   }
   external_properties_.~ObExternalFileFormat();
   ObOperator::destroy();
+}
+
+int ObSelectIntoOp::open_file_copy()
+{
+  int ret = OB_SUCCESS;
+  std::string root;
+  if (ctx_.get_my_session() == nullptr) return OB_ERR_UNEXPECTED;
+  if (OB_FAIL(check_file_sql_access(*ctx_.get_my_session(), root))) return ret;
+  try {
+    auto spec = file_sql::Spec::decode(std::string(MY_SPEC.file_copy_spec_.ptr(), MY_SPEC.file_copy_spec_.length()));
+    file_copy_writer_.reset(new file_sql::CsvWriter(spec.path, root, spec.options));
+    file_copy_done_ = false;
+    if (spec.options.header) {
+      std::vector<file_sql::Cell> header;
+      for (const auto &column : spec.columns) header.emplace_back(column.name);
+      file_copy_writer_->write(header);
+    }
+    print_params_.tz_info_ = ctx_.get_my_session()->get_timezone_info();
+    opened_ = true;
+  } catch (const std::exception &e) {
+    file_copy_writer_.reset(); ret = OB_INVALID_ARGUMENT; LOG_USER_ERROR(OB_INVALID_ARGUMENT, e.what());
+  }
+  return ret;
+}
+
+int ObSelectIntoOp::write_file_copy_row()
+{
+  int ret = OB_SUCCESS;
+  std::vector<file_sql::Cell> row;
+  size_t row_bytes = 0;
+  for (auto *expr : MY_SPEC.select_exprs_) {
+    ObDatum *datum = nullptr; ObObj object;
+    if (OB_FAIL(expr->eval(eval_ctx_, datum))) break;
+    if (OB_FAIL(datum->to_obj(object, expr->obj_meta_))) break;
+    if (object.is_null()) row.emplace_back();
+    else if (object.is_string_type() && !ob_is_text_tc(object.get_type())) {
+      const ObString text = object.get_string();
+      if (size_t(text.length()) > file_sql::MAX_RECORD_BYTES - row_bytes) return OB_SIZE_OVERFLOW;
+      row_bytes += text.length(); row.emplace_back(std::string(text.ptr(), text.length()));
+    } else {
+      if (file_copy_buffer_.empty()) file_copy_buffer_.resize(65536);
+      int64_t pos = 0;
+      for (;;) {
+        pos = 0;
+        ret = object.print_plain_str_literal(file_copy_buffer_.data(), file_copy_buffer_.size(), pos, print_params_);
+        if ((ret == OB_SIZE_OVERFLOW || ret == OB_BUF_NOT_ENOUGH) && file_copy_buffer_.size() < file_sql::MAX_RECORD_BYTES)
+          file_copy_buffer_.resize(std::min(file_sql::MAX_RECORD_BYTES, file_copy_buffer_.size() * 2));
+        else break;
+      }
+      if (OB_FAIL(ret)) break;
+      if (size_t(pos) > file_sql::MAX_RECORD_BYTES - row_bytes) return OB_SIZE_OVERFLOW;
+      row_bytes += pos; row.emplace_back(std::string(file_copy_buffer_.data(), pos));
+    }
+  }
+  if (OB_SUCC(ret)) file_copy_writer_->write(row);
+  return ret;
+}
+
+int ObSelectIntoOp::execute_file_copy(bool batch, int64_t max_row_count)
+{
+  if (file_copy_done_) {
+    if (batch) { brs_.size_ = 0; brs_.end_ = true; return OB_SUCCESS; }
+    return OB_ITER_END;
+  }
+  int ret = OB_SUCCESS; int64_t count = 0;
+  try {
+    for (;;) {
+      if (OB_FAIL(ctx_.check_status())) break;
+      clear_evaluated_flag();
+      if (batch) {
+        const ObBatchRows *rows = nullptr;
+        if (OB_FAIL(child_->get_next_batch(std::max<int64_t>(1, max_row_count), rows))) break;
+        ObEvalCtx::BatchInfoScopeGuard guard(eval_ctx_); guard.set_batch_size(rows->size_);
+        for (int64_t i = 0; OB_SUCC(ret) && i < rows->size_; ++i) {
+          if (rows->skip_->contain(i)) continue;
+          guard.set_batch_idx(i);
+          if (OB_SUCC(ret = write_file_copy_row())) ++count;
+        }
+        if (OB_FAIL(ret) || rows->end_) break;
+      } else {
+        if (OB_FAIL(child_->get_next_row())) { if (ret == OB_ITER_END) ret = OB_SUCCESS; break; }
+        if (OB_FAIL(write_file_copy_row())) break;
+        ++count;
+      }
+    }
+    if (OB_SUCC(ret) && OB_SUCC(ret = ctx_.check_status())) {
+      file_copy_writer_->commit(); file_copy_done_ = true;
+      ctx_.get_physical_plan_ctx()->set_affected_rows(count);
+    }
+  } catch (const std::exception &e) { ret = OB_INVALID_ARGUMENT; LOG_USER_ERROR(OB_INVALID_ARGUMENT, e.what()); }
+  if (OB_FAIL(ret)) file_copy_writer_.reset();
+  if (batch) { brs_.size_ = 0; brs_.end_ = true; }
+  return OB_SUCC(ret) && !batch ? OB_ITER_END : ret;
 }
 
 }

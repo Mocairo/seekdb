@@ -3,7 +3,7 @@
 
 using namespace oceanbase::common;
 
-int main()
+int run_ai_function_tests()
 {
   run_ai_prompt_tests();
   ObArenaAllocator allocator;
@@ -55,3 +55,11 @@ int main()
   std::puts("Provider parsing, ordering, vector validation and Ollama protocol: passed");
   return 0;
 }
+
+#ifndef AI_FUNCTION_STANDALONE_TEST
+#include <gtest/gtest.h>
+TEST(AIFunctionEnhancement, PromptAndProviderUtilities)
+{
+  ASSERT_EQ(0, run_ai_function_tests());
+}
+#endif

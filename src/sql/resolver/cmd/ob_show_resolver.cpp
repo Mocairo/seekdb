@@ -1,3 +1,4 @@
+#include <string>
 /*
  * Copyright (c) 2025 OceanBase.
  *
@@ -130,6 +131,11 @@ int ObShowResolver::check_db_access_for_show_sql(const ObShowResolverContext &sh
 
 int ObShowResolver::resolve(const ParseNode &parse_tree)
 {
+  if (parse_tree.type_ == T_SHOW_COLUMNS && parse_tree.num_child_ == 4 &&
+      parse_tree.children_[0] != nullptr && parse_tree.children_[0]->value_ == 1701 &&
+      parse_tree.children_[1] != nullptr) {
+    return resolve_describe_select(*parse_tree.children_[1]);
+  }
   int ret = OB_SUCCESS;
   uint64_t real_id = OB_INVALID_ID;
   ObString database_name;
@@ -1756,6 +1762,53 @@ int ObShowResolver::resolve_show_from_trigger(const ParseNode *from_tg_node,
       CK (OB_NOT_NULL(table));
       OX (show_table_name = table->get_table_name());
     }
+  }
+  return ret;
+}
+
+int ObShowResolver::resolve_describe_select(const ParseNode &select_node)
+{
+  int ret = OB_SUCCESS;
+  ObResolverParams bind_params = params_;
+  ObSelectResolver binder(bind_params);
+  if (OB_FAIL(binder.resolve(select_node))) {
+  } else if (binder.get_select_stmt() == nullptr) {
+    ret = OB_ERR_UNEXPECTED;
+  } else {
+    // Hex literals preserve arbitrary UTF-8 names without depending on SQL mode
+    // or quoting rules. Only metadata is evaluated by the generated SELECT.
+    std::string sql;
+    auto literal = [](const ObString &text) {
+      static const char digits[] = "0123456789abcdef";
+      std::string result = "CONVERT(X'";
+      for (int64_t i = 0; i < text.length(); ++i) {
+        unsigned char c = text.ptr()[i]; result += digits[c >> 4]; result += digits[c & 15];
+      }
+      return result + "' USING utf8mb4)";
+    };
+    for (int64_t i = 0; i < binder.get_select_stmt()->get_select_item_size(); ++i) {
+      const auto &item = binder.get_select_stmt()->get_select_item(i);
+      if (!sql.empty()) sql += " UNION ALL ";
+      const ObExprResType &type = item.expr_->get_result_type();
+      const char *name = nullptr;
+      switch (type.get_type()) {
+        case ObNullType: name = "NULL"; break;
+        case ObTinyIntType: name = "BOOLEAN"; break;
+        case ObIntType: name = "BIGINT"; break;
+        case ObDoubleType: name = "DOUBLE"; break;
+        case ObDateType: name = "DATE"; break;
+        case ObDateTimeType: name = "DATETIME"; break;
+        case ObVarcharType: name = "VARCHAR"; break;
+        default: name = ob_obj_type_str(type.get_type()); break;
+      }
+      const ObString &column_name = item.alias_name_.empty() ? item.expr_name_ : item.alias_name_;
+      sql += "SELECT " + literal(column_name) + " AS column_name,";
+      sql += literal(ObString(name)) + " AS column_type,";
+      sql += type.has_result_flag(NOT_NULL_FLAG) ? "'NO'" : "'YES'";
+      sql += " AS `null`,NULL AS `key`,NULL AS `default`,NULL AS extra";
+    }
+    if (sql.empty()) ret = OB_ERR_UNEXPECTED;
+    else ret = parse_and_resolve_select_sql(ObString(int32_t(sql.size()), sql.data()));
   }
   return ret;
 }

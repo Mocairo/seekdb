@@ -1,0 +1,27 @@
+# Native relational execution and exceptional-path regression cases.
+--source mysql_test/test_suite/file_sql/include/copy_file_sql_data.inc
+--disable_query_log
+let $FILE_SQL_DATA_DIR = $OBSERVER_DIR/data_for_mysqltest_file_sql;
+set session enable_file_sql=ON;
+--echo # Native INNER and LEFT JOIN across formats
+eval select a.id,a.name,b.score from read_csv('$FILE_SQL_DATA_DIR/basic.csv') a inner join read_json('$FILE_SQL_DATA_DIR/basic.jsonl') b on a.id=b.id order by a.id;
+eval select a.id,b.c1 from read_csv('$FILE_SQL_DATA_DIR/basic.csv') a left join read_parquet('$FILE_SQL_DATA_DIR/simple.parquet') b on a.id=b.c1 and b.c1<3 order by a.id;
+--echo # Correlated subquery requires file rescans
+eval select a.id,(select count(*) from read_json('$FILE_SQL_DATA_DIR/basic.jsonl') b where a.id=b.id) as n from read_csv('$FILE_SQL_DATA_DIR/basic.csv') a order by a.id;
+--echo # Expressions, groups, HAVING and projection
+eval select active,count(*) as n,min(id),max(id),sum(score),avg(score) from read_csv('$FILE_SQL_DATA_DIR/basic.csv') group by active having count(*)>1;
+eval describe select id as renamed,name,score+1 as adjusted from read_csv('$FILE_SQL_DATA_DIR/basic.csv');
+--disable_result_log
+--error 1210
+eval select * from read_csv('$FILE_SQL_DATA_DIR/../not_allowed.csv');
+--error 1210
+eval select * from read_csv('$FILE_SQL_DATA_DIR/basic.csv',header=true,header=false);
+--error 1235
+eval select * from read_ndjson('$FILE_SQL_DATA_DIR/basic.jsonl',sample_size=1);
+set session enable_file_sql=OFF;
+--error 1235
+eval select count(*) from read_csv('$FILE_SQL_DATA_DIR/basic.csv');
+--enable_result_log
+select 1+2 as ordinary_sql;
+--enable_query_log
+--source mysql_test/test_suite/file_sql/include/remove_file_sql_data.inc

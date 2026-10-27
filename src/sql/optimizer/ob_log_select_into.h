@@ -165,6 +165,7 @@ public:
     return external_properties_;
   }
   const common::ObIArray<ObRawExpr*> &get_select_exprs() const { return select_exprs_; }
+  common::ObString file_copy_spec_;
   common::ObIArray<ObRawExpr*> &get_select_exprs() { return select_exprs_; }
   virtual int est_cost() override;
   virtual int compute_plan_type() override;

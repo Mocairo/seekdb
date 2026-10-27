@@ -21,12 +21,15 @@ def main():
     commands = json.loads((build / 'compile_commands.json').read_text())
     command = next(c['command'] for c in commands if 'engine_expr_15' in c['file'])
     # Standalone headers expose legacy memset warnings hidden by unity includes.
-    prefix = command.split(' /Fo', 1)[0] + ' -Wno-nontrivial-memcall'
+    prefix = (command.split(' /Fo', 1)[0] + ' -Wno-nontrivial-memcall'
+              ' -DAI_FUNCTION_STANDALONE_TEST -DAI_FUNCTION_TESTS_ONLY')
     objects = []
-    for source in ['ob_expr_ai_prompt_test.cpp', 'test_ob_openai_utils.cpp']:
-        obj = out / (source + '.obj')
-        args = ['/Fo' + str(obj), '/Fd' + str(out) + os.sep, '-c', '--', str(tests / source)]
-        print('Compiling ' + source, flush=True)
+    sources = [tests / 'ob_expr_ai_prompt_test.cpp', tests / 'test_ob_openai_utils.cpp',
+               tests.parents[2] / 'all_tests_main.cpp']
+    for source in sources:
+        obj = out / (source.name + '.obj')
+        args = ['/Fo' + str(obj), '/Fd' + str(out) + os.sep, '-c', '--', str(source)]
+        print('Compiling ' + source.name, flush=True)
         subprocess.run(prefix + ' ' + subprocess.list2cmdline(args), cwd=build, check=True)
         objects.append(str(obj))
     ninja = (build / 'build.ninja').read_text()

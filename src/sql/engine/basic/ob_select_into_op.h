@@ -23,6 +23,7 @@
 #include "sql/engine/basic/ob_select_into_basic.h"
 #include "sql/engine/basic/ob_external_file_writer.h"
 #include "sql/resolver/dml/ob_select_stmt.h"
+#include "sql/engine/basic/ob_file_scan_utils.h"
 
 namespace oceanbase
 {
@@ -76,6 +77,7 @@ public:
   }
 
   ObItemType into_type_;
+  common::ObString file_copy_spec_;
   common::ObFixedArray<common::ObString, common::ObIAllocator> user_vars_;
   common::ObObj outfile_name_;
   common::ObObj field_str_;
@@ -193,6 +195,12 @@ public:
   virtual int inner_get_next_row() override;
   virtual int inner_get_next_batch(const int64_t max_row_cnt) override;
   virtual void destroy() override;
+  int open_file_copy();
+  int write_file_copy_row();
+  int execute_file_copy(bool batch, int64_t max_row_count);
+  std::unique_ptr<file_sql::CsvWriter> file_copy_writer_;
+  bool file_copy_done_ = false;
+  std::vector<char> file_copy_buffer_;
 
 private:
   int init_env_common();

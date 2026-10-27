@@ -38,6 +38,9 @@ if(WIN32)
   endif()
   set_source_files_properties(${STANDBY_PROTO_SRCS} ${STANDBY_PROTO_HDRS}
     PROPERTIES GENERATED TRUE)
+  # The bundled protobuf runtime is built in Release mode. Its generated
+  # memswap calls must be inlined when compiled by clang-cl as well.
+  set_source_files_properties(${STANDBY_PROTO_SRCS} PROPERTIES COMPILE_OPTIONS "/O2")
 else()
   set(STANDBY_PROTO_SRCS
     standbyservice.pb.cc

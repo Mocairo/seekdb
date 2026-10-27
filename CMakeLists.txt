@@ -313,6 +313,16 @@ include(cmake/Rust.cmake)
 include_directories("${CMAKE_SOURCE_DIR}/rust/sql-nio/include")
 
 add_subdirectory(src)
+option(OB_BUILD_FILE_SQL_TESTS "Build file SQL scanner and parser acceptance tests" OFF)
+if(OB_BUILD_FILE_SQL_TESTS)
+  enable_testing()
+  include(unittest/sql/file_sql_tests.cmake)
+endif()
+option(OB_BUILD_AI_FUNCTION_TESTS "Build AI prompt and provider acceptance tests" OFF)
+if(OB_BUILD_AI_FUNCTION_TESTS)
+  enable_testing()
+  include(unittest/sql/engine/expr/ai_function_tests.cmake)
+endif()
 
 # Farm compile and pretest still publish and consume liboberror.so.  Keep the
 # legacy error-code utility available as an explicit compatibility target

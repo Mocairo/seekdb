@@ -6818,6 +6818,7 @@ int ObLogPlan::allocate_select_into_as_top(ObLogicalOperator *&old_top)
     }
     if (OB_SUCC(ret)) {
       select_into->set_into_type(into_item->into_type_);
+      select_into->file_copy_spec_ = into_item->file_copy_spec_;
       select_into->set_outfile_name(into_item->outfile_name_);
       select_into->set_field_str(into_item->field_str_);
       select_into->set_line_str(into_item->line_str_);

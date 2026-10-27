@@ -53,8 +53,9 @@ ob_define(USE_LTO_CACHE OFF)
 ob_define(OB_BUILD_SYS_VEC_IDX ON)
 
 if(WIN32)
-  EXECUTE_PROCESS(COMMAND powershell -NoProfile -Command "$env:PROCESSOR_ARCHITECTURE"
-    OUTPUT_VARIABLE ARCHITECTURE)
+  # This value is already inherited by CMake. Avoid starting another shell,
+  # which is not available in all non-interactive Windows build environments.
+  set(ARCHITECTURE "$ENV{PROCESSOR_ARCHITECTURE}")
   STRING(TOLOWER "${ARCHITECTURE}" ARCHITECTURE)
   STRING(STRIP "${ARCHITECTURE}" ARCHITECTURE)
 elseif(OB_ANDROID)
