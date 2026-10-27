@@ -18,9 +18,9 @@
 
 #include "config_bridge.h"
 #include "config_checkers.h"
+#include "share/rc/ob_server_runtime.h"
 #ifndef _WIN32
 #include <unistd.h>
-#include "share/rc/ob_server_runtime.h"
 #include <fcntl.h>
 #include <sys/file.h>
 #else
@@ -1323,6 +1323,21 @@ int ObServer::start()
       LOG_ERROR("fail to wait for server metadata readiness", KR(ret));
     } else {
       FLOG_INFO("server metadata is ready");
+    }
+
+    // Background package loading may overlap the rest of startup, but a
+    // writable SQL listener must not accept CALLs before those packages exist.
+    // Otherwise the first request pays the initialization cost from its own
+    // query timeout. Standby servers rely on replay rather than this loader.
+    if (OB_SUCC(ret) && share::server_is_write_enabled()) {
+      ObTimeoutCtx package_timeout;
+      if (OB_FAIL(package_timeout.set_timeout(config::_ob_ddl_timeout()))) {
+        LOG_ERROR("fail to set system package startup timeout", KR(ret));
+      } else if (OB_FAIL(ob_service_.wait_system_package_ready(package_timeout))) {
+        LOG_ERROR("system packages did not become ready before SQL listener start", KR(ret));
+      } else {
+        FLOG_INFO("system packages ready before SQL listener start");
+      }
     }
 
     if (FAILEDx(net_frame_.start())) {

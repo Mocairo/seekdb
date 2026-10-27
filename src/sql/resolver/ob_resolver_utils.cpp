@@ -5308,11 +5308,11 @@ int ObResolverUtils::set_parallel_info(sql::ObSQLSessionInfo &session_info,
 int ObResolverUtils::wait_for_sys_package_ready(ObSQLSessionInfo &session_info)
 {
   int ret = OB_SUCCESS;
-  if (config::_enable_async_load_sys_package() && !GCTX.sys_package_ready_
+  if (config::_enable_async_load_sys_package() && !ATOMIC_LOAD(&GCTX.sys_package_ready_)
       && session_info.is_user_session() && share::server_is_write_enabled()) {
     const int64_t retry_interval_us = 100L * 1000L; // 100ms
     bool waited = false;
-    while (!GCTX.sys_package_ready_ && OB_SUCC(ret)) {
+    while (!ATOMIC_LOAD(&GCTX.sys_package_ready_) && OB_SUCC(ret)) {
       if (NULL != session_info.get_cur_exec_ctx() && OB_FAIL(session_info.get_cur_exec_ctx()->check_status())) {
       } else {
         if (!waited) {
@@ -5323,7 +5323,7 @@ int ObResolverUtils::wait_for_sys_package_ready(ObSQLSessionInfo &session_info)
       }
     }
     if (OB_FAIL(ret)) {
-    } else if (!GCTX.sys_package_ready_) {
+    } else if (!ATOMIC_LOAD(&GCTX.sys_package_ready_)) {
       LOG_WARN("sys package not ready after waiting");
     } else {
       if (waited) {
