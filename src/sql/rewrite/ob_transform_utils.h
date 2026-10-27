@@ -2040,11 +2040,13 @@ private:
                                        ObIArray<ObRawExpr*> &outer_conditions,
                                        ObIArray<TableItem*> &right_tables,
                                        ObIArray<ObSEArray<ObRawExpr*, 4>> &new_outer_conds);
+public:
   static int inner_check_need_calc_match_score(ObExecContext *exec_ctx,
                                               ObRawExpr* expr, 
                                               ObRawExpr* match_expr, 
                                               bool &need_calc,
                                               ObIArray<ObExprConstraint> &constraints);
+private:
   static int check_stmt_can_trans_as_exists(ObSelectStmt *stmt,
                                             ObTransformerCtx *ctx,
                                             bool is_correlated,

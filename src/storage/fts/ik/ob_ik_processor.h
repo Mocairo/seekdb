@@ -103,6 +103,17 @@ public:
 
   int process(TokenizeContext &ctx);
 
+  // The parser already decoded the current character before dispatching to
+  // the processor chain. Keep this overload so callers can reuse that work
+  // instead of decoding and classifying the same character once per processor.
+  OB_INLINE int process(TokenizeContext &ctx,
+                        const char *ch,
+                        const uint8_t char_len,
+                        const ObFTCharUtil::CharType type)
+  {
+    return do_process(ctx, ch, char_len, type);
+  }
+
   virtual int do_process(TokenizeContext &ctx,
                          const char *ch,
                          const uint8_t char_len,

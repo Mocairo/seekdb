@@ -28,9 +28,12 @@ int ObTextDaaTIter::init(const ObTextDaaTParam &param)
   if (OB_ISNULL(param.base_param_) || OB_ISNULL(param.dim_iters_) || OB_ISNULL(param.allocator_)
       || OB_ISNULL(param.relevance_collector_)) {
     ret = OB_INVALID_ARGUMENT;
+    LOG_INFO("daat iter invalid param", K(ret), KP(param.base_param_), KP(param.dim_iters_),
+             KP(param.allocator_), KP(param.relevance_collector_));
   } else if (OB_FAIL(ObSRDaaTIterImpl::init(*param.base_param_, *param.dim_iters_,
                                             *param.allocator_, *param.relevance_collector_))) {
-  } else if (OB_FAIL(bm25_param_estimator_.init(param.bm25_param_est_ctx_))) {
+  } else if (param.base_param_->need_calc_relevance()
+             && OB_FAIL(bm25_param_estimator_.init(param.bm25_param_est_ctx_))) {
   } else {
     mode_flag_ = param.mode_flag_;
     function_lookup_mode_ = param.function_lookup_mode_;
@@ -70,7 +73,7 @@ int ObTextDaaTIter::pre_process()
   int ret = OB_SUCCESS;
   if (dim_iters_->count() == 0) {
     ret = OB_ITER_END;
-  } else if (iter_param_->need_project_relevance()) {
+  } else if (iter_param_->need_calc_relevance()) {
     if (OB_FAIL(bm25_param_estimator_.do_estimation(*iter_param_->eval_ctx_))) {
     }
   }
@@ -109,9 +112,12 @@ int ObTextBMWIter::init(const ObTextDaaTParam &param)
   if (OB_ISNULL(param.base_param_) || OB_ISNULL(param.dim_iters_) || OB_ISNULL(param.allocator_)
       || OB_ISNULL(param.relevance_collector_)) {
     ret = OB_INVALID_ARGUMENT;
+    LOG_WARN("bmw iter invalid param", K(ret), KP(param.base_param_), KP(param.dim_iters_),
+             KP(param.allocator_), KP(param.relevance_collector_));
   } else if (OB_FAIL(ObSRBMWIterImpl::init(*param.base_param_, *param.dim_iters_,
                                            *param.allocator_, *param.relevance_collector_))) {
-  } else if (OB_FAIL(bm25_param_estimator_.init(param.bm25_param_est_ctx_))) {
+  } else if (param.base_param_->need_calc_relevance()
+             && OB_FAIL(bm25_param_estimator_.init(param.bm25_param_est_ctx_))) {
   }
   return ret;
 }
@@ -123,7 +129,8 @@ int ObTextBMWIter::get_next_rows(const int64_t capacity, int64_t &count)
     ret = OB_NOT_INIT;
   } else if (dim_iters_->count() == 0) {
     ret = OB_ITER_END;
-  } else if (OB_FAIL(bm25_param_estimator_.do_estimation(*iter_param_->eval_ctx_))) {
+  } else if (iter_param_->need_calc_relevance()
+             && OB_FAIL(bm25_param_estimator_.do_estimation(*iter_param_->eval_ctx_))) {
   }
 
   if (FAILEDx(ObSRBMWIterImpl::get_next_rows(capacity, count))) {

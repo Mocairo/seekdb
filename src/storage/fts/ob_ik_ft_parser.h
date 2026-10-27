@@ -37,6 +37,7 @@ public:
   ObIKFTParser(ObIAllocator &allocator, ObFTDictHub *hub)
       : allocator_(allocator),
         is_inited_(false),
+        use_cached_dicts_(false),
         coll_type_(ObCollationType::CS_TYPE_INVALID),
         ctx_(nullptr),
         hub_(hub),
@@ -92,6 +93,7 @@ private:
   static constexpr int SEGMENT_LIMIT = 1000;
   ObIAllocator &allocator_;
   bool is_inited_;
+  bool use_cached_dicts_;
 
   ObCollationType coll_type_;
   TokenizeContext *ctx_;

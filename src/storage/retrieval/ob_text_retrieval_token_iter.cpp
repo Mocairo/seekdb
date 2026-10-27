@@ -203,7 +203,7 @@ int ObTextRetrievalTokenIter::get_next_row()
   int ret = OB_SUCCESS;
   if (IS_NOT_INIT) {
     ret = OB_NOT_INIT;
-  } else if (!token_doc_cnt_calculated_ && OB_FAIL(estimate_token_doc_cnt())) {
+  } else if (need_calc_relevance() && !token_doc_cnt_calculated_ && OB_FAIL(estimate_token_doc_cnt())) {
   } else if (OB_FAIL(query::das_scan_next_row(inv_idx_scan_iter_))) {
     if (OB_UNLIKELY(OB_ITER_END != ret)) {
     }
@@ -242,7 +242,7 @@ int ObTextRetrievalTokenIter::get_next_batch(const int64_t capacity, int64_t &co
   count = 0;
   if (IS_NOT_INIT) {
     ret = OB_NOT_INIT;
-  } else if (!token_doc_cnt_calculated_ && OB_FAIL(estimate_token_doc_cnt())) {
+  } else if (need_calc_relevance() && !token_doc_cnt_calculated_ && OB_FAIL(estimate_token_doc_cnt())) {
   } else if (OB_FAIL(query::das_scan_next_rows(
                  inv_idx_scan_iter_, count, OB_MIN(max_batch_size_, capacity)))) {
     if (OB_UNLIKELY(OB_ITER_END != ret)) {
@@ -424,6 +424,8 @@ int ObTextRetrievalDaaTTokenIter::init(const ObTextRetrievalScanIterParam &iter_
   allocator_ = iter_param.allocator_;
   if (OB_ISNULL(iter_param.eval_ctx_) || OB_ISNULL(iter_param.inv_scan_domain_id_col_) || OB_ISNULL(allocator_)) {
     ret = OB_INVALID_ARGUMENT;
+    LOG_WARN("daat token iter invalid param", K(ret), KP(iter_param.eval_ctx_),
+             KP(iter_param.inv_scan_domain_id_col_), KP(allocator_));
   } else if (OB_ISNULL(buf = allocator_->alloc(sizeof(ObTextRetrievalTokenIter)))) {
     ret = OB_ALLOCATE_MEMORY_FAILED;
   } else {
@@ -525,8 +527,9 @@ int ObTextRetrievalDaaTTokenIter::save_docids()
   } else {
     cur_idx_ = 0;
     const ObDatumVector &doc_id_datum = inv_scan_domain_id_col_->locate_expr_datumvector(*eval_ctx_);
+    const sql::ObBitVector *skip = token_iter_->get_skip();
     for (int64_t i = 0; OB_SUCC(ret) && i < count_; ++i) {
-      if (OB_LIKELY(!token_iter_->get_skip()->at(i))) {
+      if (OB_ISNULL(skip) || OB_LIKELY(!skip->at(i))) {
         if (OB_FAIL(doc_id_[i].from_datum(*doc_id_datum.at(i)))) {
         };
       }
@@ -580,6 +583,7 @@ int ObTextRetrievalDaaTTokenIter::advance_to(const ObDatum &id_datum)
 int ObTextRetrievalDaaTTokenIter::get_curr_score(double &score) const
 {
   int ret = OB_SUCCESS;
+  score = 0.0;
   if (OB_UNLIKELY(cur_idx_ >= count_)) {
     ret = OB_ARRAY_OUT_OF_RANGE;
   } else if (relevance_expr_) {

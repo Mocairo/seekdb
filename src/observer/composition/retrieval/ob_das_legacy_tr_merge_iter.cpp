@@ -98,6 +98,7 @@ int ObDASLegacyTRMergeIter::inner_init(ObDASIterParam &param)
     inv_idx_tablet_switched_ = false;
     is_inited_ = true;
   }
+  LOG_INFO("legacy tr merge iter inner_init end", K(ret), K(flags_), K(query_tokens_.count()));
   return ret;
 }
 
@@ -105,7 +106,7 @@ int ObDASLegacyTRMergeIter::init_das_iter_scan_params()
 {
   int ret = OB_SUCCESS;
   const int64_t dim_iter_cnt = taat_mode_ ? 1 : query_tokens_.count();
-  if (!ir_ctdef_->need_estimate_total_doc_cnt() && 0 != dim_iter_cnt) {
+  if (ir_ctdef_->need_calc_relevance() && !ir_ctdef_->need_estimate_total_doc_cnt() && 0 != dim_iter_cnt) {
     void *buf = nullptr;
     if (OB_ISNULL(buf = myself_allocator_.alloc(sizeof(ObTableScanParam)))) {
       ret = OB_ALLOCATE_MEMORY_FAILED;
@@ -245,6 +246,7 @@ int ObDASLegacyTRMergeIter::init_das_iter_scan_param(const ObTabletID &tablet_id
   int ret = OB_SUCCESS;
   if (OB_ISNULL(ctdef) || OB_ISNULL(rtdef)) {
     ret = OB_INVALID_ARGUMENT;
+    LOG_WARN("legacy init scan param invalid", K(ret), KP(ctdef), KP(rtdef));
   } else {
 
 
@@ -380,7 +382,10 @@ int ObDASLegacyTRMergeIter::create_sparse_retrieval_iter()
   sr_iter_param_.id_proj_expr_ = ir_ctdef_->inv_scan_domain_id_col_;
   sr_iter_param_.relevance_expr_ = ir_ctdef_->relevance_expr_;
   sr_iter_param_.relevance_proj_expr_ = ir_ctdef_->relevance_proj_col_;
-  sr_iter_param_.filter_expr_ = ir_ctdef_->match_filter_;
+  // The pushed match filter is evaluated from the projected relevance score, so
+  // it can only run when relevance is calculated. Without relevance the scan
+  // ranges and DAAT should-match logic already produce the matching docs.
+  sr_iter_param_.filter_expr_ = ir_ctdef_->need_calc_relevance() ? ir_ctdef_->match_filter_ : nullptr;
   sr_iter_param_.topk_limit_ = topk_limit_;
   if (OB_NOT_NULL(ir_ctdef_->field_boost_expr_)) {
     ObDatum *boost_datum = nullptr;
@@ -468,24 +473,27 @@ int ObDASLegacyTRMergeIter::create_sparse_retrieval_iter()
 int ObDASLegacyTRMergeIter::init_daat_iter_param(ObTextDaaTParam &iter_param)
 {
   int ret = OB_SUCCESS;
+  const bool need_relevance = ir_ctdef_->need_calc_relevance();
   iter_param.dim_iters_ = &dim_iters_;
   iter_param.base_param_ = &sr_iter_param_;
   iter_param.allocator_ = &myself_allocator_;
   iter_param.mode_flag_ = ir_ctdef_->mode_flag_;
   iter_param.function_lookup_mode_ = function_lookup_mode_;
-  iter_param.bm25_param_est_ctx_.total_doc_cnt_expr_
-      = ir_ctdef_->get_doc_agg_ctdef()->pd_expr_spec_.pd_storage_aggregate_output_.at(0);
-  iter_param.bm25_param_est_ctx_.estimated_total_doc_cnt_ = ir_ctdef_->estimated_total_doc_cnt_;
-  iter_param.bm25_param_est_ctx_.need_est_avg_doc_token_cnt_ = ir_ctdef_->need_avg_doc_len_est();
-  iter_param.bm25_param_est_ctx_.can_est_by_sum_skip_index_ = ir_ctdef_->avg_doc_len_est_spec_.can_est_by_sum_skip_index_;
-  iter_param.bm25_param_est_ctx_.avg_doc_token_cnt_expr_ = ir_ctdef_->avg_doc_token_cnt_expr_;
-  iter_param.bm25_param_est_ctx_.doc_length_est_param_ = &doc_length_est_param_;
+  if (need_relevance) {
+    iter_param.bm25_param_est_ctx_.total_doc_cnt_expr_
+        = ir_ctdef_->get_doc_agg_ctdef()->pd_expr_spec_.pd_storage_aggregate_output_.at(0);
+    iter_param.bm25_param_est_ctx_.estimated_total_doc_cnt_ = ir_ctdef_->estimated_total_doc_cnt_;
+    iter_param.bm25_param_est_ctx_.need_est_avg_doc_token_cnt_ = ir_ctdef_->need_avg_doc_len_est();
+    iter_param.bm25_param_est_ctx_.can_est_by_sum_skip_index_ = ir_ctdef_->avg_doc_len_est_spec_.can_est_by_sum_skip_index_;
+    iter_param.bm25_param_est_ctx_.avg_doc_token_cnt_expr_ = ir_ctdef_->avg_doc_token_cnt_expr_;
+    iter_param.bm25_param_est_ctx_.doc_length_est_param_ = &doc_length_est_param_;
+  }
   if (query_tokens_.count() == 0) {
     // do nothing
-  } else if (OB_ISNULL(iter_param.bm25_param_est_ctx_.total_doc_cnt_expr_)) {
+  } else if (need_relevance && OB_ISNULL(iter_param.bm25_param_est_ctx_.total_doc_cnt_expr_)) {
     ret = OB_ERR_UNEXPECTED;
-  } else if (OB_FAIL(init_doc_length_est_param())) {
-  } else if (!ir_ctdef_->need_estimate_total_doc_cnt()) {
+  } else if (need_relevance && OB_FAIL(init_doc_length_est_param())) {
+  } else if (need_relevance && !ir_ctdef_->need_estimate_total_doc_cnt()) {
     if (OB_UNLIKELY(!static_cast<sql::ObStoragePushdownFlag>(total_doc_cnt_scan_param_->pd_storage_flag_).is_aggregate_pushdown())) {
       ret = OB_NOT_IMPLEMENT;
       LOG_ERROR("aggregate without pushdown not implemented", K(ret));
@@ -522,21 +530,24 @@ int ObDASLegacyTRMergeIter::init_taat_iter_param(ObTextTaaTParam &iter_param)
   iter_param.query_tokens_ = &query_tokens_;
   iter_param.base_param_ = &sr_iter_param_;
   iter_param.allocator_ = &myself_allocator_;
+  const bool need_relevance = ir_ctdef_->need_calc_relevance();
   iter_param.mode_flag_ = ir_ctdef_->mode_flag_;
   iter_param.function_lookup_mode_ = function_lookup_mode_;
-  iter_param.bm25_param_est_ctx_.total_doc_cnt_expr_
-      = ir_ctdef_->get_doc_agg_ctdef()->pd_expr_spec_.pd_storage_aggregate_output_.at(0);
-  iter_param.bm25_param_est_ctx_.estimated_total_doc_cnt_ = ir_ctdef_->estimated_total_doc_cnt_;
-  iter_param.bm25_param_est_ctx_.need_est_avg_doc_token_cnt_ = ir_ctdef_->need_avg_doc_len_est();
-  iter_param.bm25_param_est_ctx_.can_est_by_sum_skip_index_ = ir_ctdef_->avg_doc_len_est_spec_.can_est_by_sum_skip_index_;
-  iter_param.bm25_param_est_ctx_.avg_doc_token_cnt_expr_ = ir_ctdef_->avg_doc_token_cnt_expr_;
-  iter_param.bm25_param_est_ctx_.doc_length_est_param_ = &doc_length_est_param_;
+  if (need_relevance) {
+    iter_param.bm25_param_est_ctx_.total_doc_cnt_expr_
+        = ir_ctdef_->get_doc_agg_ctdef()->pd_expr_spec_.pd_storage_aggregate_output_.at(0);
+    iter_param.bm25_param_est_ctx_.estimated_total_doc_cnt_ = ir_ctdef_->estimated_total_doc_cnt_;
+    iter_param.bm25_param_est_ctx_.need_est_avg_doc_token_cnt_ = ir_ctdef_->need_avg_doc_len_est();
+    iter_param.bm25_param_est_ctx_.can_est_by_sum_skip_index_ = ir_ctdef_->avg_doc_len_est_spec_.can_est_by_sum_skip_index_;
+    iter_param.bm25_param_est_ctx_.avg_doc_token_cnt_expr_ = ir_ctdef_->avg_doc_token_cnt_expr_;
+    iter_param.bm25_param_est_ctx_.doc_length_est_param_ = &doc_length_est_param_;
+  }
   if (OB_ISNULL(iter_param.dim_iter_ = dim_iter_)) {
     ret = OB_ERR_UNEXPECTED;
-  } else if (OB_ISNULL(iter_param.bm25_param_est_ctx_.total_doc_cnt_expr_)) {
+  } else if (need_relevance && OB_ISNULL(iter_param.bm25_param_est_ctx_.total_doc_cnt_expr_)) {
     ret = OB_ERR_UNEXPECTED;
-  } else if (OB_FAIL(init_doc_length_est_param())) {
-  } else if (!ir_ctdef_->need_estimate_total_doc_cnt()) {
+  } else if (need_relevance && OB_FAIL(init_doc_length_est_param())) {
+  } else if (need_relevance && !ir_ctdef_->need_estimate_total_doc_cnt()) {
     if (OB_UNLIKELY(!static_cast<sql::ObStoragePushdownFlag>(total_doc_cnt_scan_param_->pd_storage_flag_).is_aggregate_pushdown())) {
       ret = OB_NOT_IMPLEMENT;
       LOG_ERROR("aggregate without pushdown not implemented", K(ret));
@@ -698,15 +709,23 @@ int ObDASLegacyTRMergeIter::gen_inv_idx_scan_one_range(const ObString &query_tok
 int ObDASLegacyTRMergeIter::do_table_scan()
 {
   int ret = OB_SUCCESS;
+  const bool calc_relevance = OB_NOT_NULL(ir_ctdef_) && ir_ctdef_->need_calc_relevance();
+  LOG_INFO("legacy tr merge iter do_table_scan begin", K(IS_NOT_INIT), K(IS_INIT),
+           K(function_lookup_mode_), K(topk_mode_), K(daat_mode_), K(taat_mode_),
+           K(query_tokens_.count()), KP(ir_ctdef_), K(children_cnt_), K(calc_relevance));
   if (IS_NOT_INIT) {
     ret = OB_NOT_INIT;
   } else {
     if (function_lookup_mode_) {
       // skip the following, which should have been done
     } else if (OB_FAIL(init_das_iter_scan_params())) {
+      LOG_INFO("legacy init_das_iter_scan_params failed", K(ret));
     } else if (OB_FAIL(create_dim_iters())) {
+      LOG_INFO("legacy create_dim_iters failed", K(ret));
     } else if (OB_FAIL(create_sparse_retrieval_iter())) {
+      LOG_INFO("legacy create_sparse_retrieval_iter failed", K(ret));
     } else if (OB_FAIL(set_children_iter_rangekey())) {
+      LOG_INFO("legacy set_children_iter_rangekey failed", K(ret));
     }
     if (OB_FAIL(ret)) {
     } else if (OB_UNLIKELY(!check_rangekey_inited_)) {
@@ -714,9 +733,11 @@ int ObDASLegacyTRMergeIter::do_table_scan()
     }
     for (int64_t i = 0; OB_SUCC(ret) && i < children_cnt_; ++i) {
       if (OB_FAIL(children_[i]->do_table_scan())) {
+        LOG_INFO("legacy child do_table_scan failed", K(ret), K(i), K(children_cnt_));
       }
     }
   }
+  LOG_INFO("legacy tr merge iter do_table_scan end", K(ret));
   return ret;
 }
 
@@ -886,6 +907,9 @@ int ObDASLegacyTRMergeIter::inner_get_next_rows(int64_t &count, int64_t capacity
     count = 0;
   } else {
     ret = sparse_retrieval_iter_->get_next_rows(capacity, count);
+    if (OB_FAIL(ret) && OB_ITER_END != ret) {
+      LOG_INFO("legacy sparse get_next_rows failed", K(ret), K(capacity), K(count));
+    }
   }
   return ret;
 }

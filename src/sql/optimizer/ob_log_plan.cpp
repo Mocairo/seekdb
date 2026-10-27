@@ -12167,6 +12167,76 @@ int ObLogPlan::prepare_text_retrieval_merge(const ObIArray<ObRawExpr *> &merge_m
   return ret;
 }
 
+static int check_match_score_used(ObExecContext *exec_ctx,
+                                  const ObDMLStmt *stmt,
+                                  ObRawExpr *match_expr,
+                                  bool &need_calc,
+                                  ObIArray<ObExprConstraint> &constraints)
+{
+  int ret = OB_SUCCESS;
+  bool tmp_need = false;
+  need_calc = false;
+  if (OB_ISNULL(exec_ctx) || OB_ISNULL(stmt) || OB_ISNULL(match_expr)) {
+    ret = OB_INVALID_ARGUMENT;
+  } else {
+    if (stmt->is_select_stmt()) {
+      const ObSelectStmt *select_stmt = static_cast<const ObSelectStmt *>(stmt);
+      const ObIArray<SelectItem> &select_items = select_stmt->get_select_items();
+      for (int64_t i = 0; OB_SUCC(ret) && !need_calc && i < select_items.count(); ++i) {
+        tmp_need = false;
+        if (OB_FAIL(ObTransformUtils::inner_check_need_calc_match_score(
+                      exec_ctx, select_items.at(i).expr_, match_expr, tmp_need, constraints))) {
+        } else if (tmp_need) {
+          need_calc = true;
+        }
+      }
+      const ObIArray<OrderItem> &order_items = select_stmt->get_order_items();
+      for (int64_t i = 0; OB_SUCC(ret) && !need_calc && i < order_items.count(); ++i) {
+        tmp_need = false;
+        if (OB_FAIL(ObTransformUtils::inner_check_need_calc_match_score(
+                      exec_ctx, order_items.at(i).expr_, match_expr, tmp_need, constraints))) {
+        } else if (tmp_need) {
+          need_calc = true;
+        }
+      }
+      const ObIArray<ObRawExpr *> &group_exprs = select_stmt->get_group_exprs();
+      for (int64_t i = 0; OB_SUCC(ret) && !need_calc && i < group_exprs.count(); ++i) {
+        tmp_need = false;
+        if (OB_FAIL(ObTransformUtils::inner_check_need_calc_match_score(
+                      exec_ctx, group_exprs.at(i), match_expr, tmp_need, constraints))) {
+        } else if (tmp_need) {
+          need_calc = true;
+        }
+      }
+      const ObIArray<ObRawExpr *> &having_exprs = select_stmt->get_having_exprs();
+      for (int64_t i = 0; OB_SUCC(ret) && !need_calc && i < having_exprs.count(); ++i) {
+        tmp_need = false;
+        if (OB_FAIL(ObTransformUtils::inner_check_need_calc_match_score(
+                      exec_ctx, having_exprs.at(i), match_expr, tmp_need, constraints))) {
+        } else if (tmp_need) {
+          need_calc = true;
+        }
+      }
+    }
+    const ObIArray<ObRawExpr *> &conditions = stmt->get_condition_exprs();
+    for (int64_t i = 0; OB_SUCC(ret) && !need_calc && i < conditions.count(); ++i) {
+      ObRawExpr *condition = conditions.at(i);
+      if (condition == match_expr) {
+        // A bare MATCH in WHERE is a boolean filter. The scan result already
+        // identifies matching docs, so the relevance score is not needed.
+      } else {
+        tmp_need = false;
+        if (OB_FAIL(ObTransformUtils::inner_check_need_calc_match_score(
+                      exec_ctx, condition, match_expr, tmp_need, constraints))) {
+        } else if (tmp_need) {
+          need_calc = true;
+        }
+      }
+    }
+  }
+  return ret;
+}
+
 int ObLogPlan::prepare_text_retrieval_info(const uint64_t ref_table_id,
                                            const uint64_t index_table_id,
                                            ObMatchFunRawExpr *match_against,
@@ -12183,7 +12253,7 @@ int ObLogPlan::prepare_text_retrieval_info(const uint64_t ref_table_id,
   uint64_t fwd_idx_tid = OB_INVALID_ID;
   uint64_t inv_idx_tid = OB_INVALID_ID;
   ObSEArray<ObAuxTableMetaInfo, 4> index_infos;
-  bool need_calc_relevance = true;
+  bool need_calc_relevance = false;
   ObSEArray<ObExprConstraint, 2> constraints;
   uint64_t docid_col_id = OB_INVALID_ID;
   if (OB_ISNULL(match_against) || OB_ISNULL(get_stmt()) || OB_ISNULL(get_optimizer_context().get_query_ctx())) {
@@ -12251,18 +12321,26 @@ int ObLogPlan::prepare_text_retrieval_info(const uint64_t ref_table_id,
     }
   }
   if (OB_SUCC(ret)) {
-    /*
-    if (OB_FAIL(ObTransformUtils::check_need_calc_match_score(get_optimizer_context().get_exec_ctx(),
-                                                              get_stmt(),
-                                                              match_against,
-                                                              need_calc_relevance,
-                                                              constraints))) {
-      LOG_WARN("failed to check need calc relevance", K(ret));
-    } else if (!need_calc_relevance &&
-               OB_FAIL(append_array_no_dup(get_optimizer_context().get_query_ctx()->all_expr_constraints_, constraints))) {
-      LOG_WARN("failed to append array no dup", K(ret));
+    ObQueryCtx *query_ctx = get_optimizer_context().get_query_ctx();
+    bool score_used = false;
+    if (OB_ISNULL(query_ctx)) {
+      ret = OB_ERR_UNEXPECTED;
+    } else if (OB_FAIL(check_match_score_used(get_optimizer_context().get_exec_ctx(),
+                                              get_stmt(),
+                                              match_against,
+                                              score_used,
+                                              constraints))) {
+      LOG_WARN("failed to check need calc match score, fallback to calc", K(ret));
+      need_calc_relevance = true;
+      ret = OB_SUCCESS;
+    } else {
+      // Boolean mode needs the match result to evaluate the boolean filter,
+      // so relevance has to be calculated even when the score is not selected.
+      need_calc_relevance = score_used || BOOLEAN_MODE == match_against->get_mode_flag();
+      if (!need_calc_relevance &&
+          OB_FAIL(append_array_no_dup(query_ctx->all_expr_constraints_, constraints))) {
+      }
     }
-    */
     tr_info.match_expr_ = match_against;
     tr_info.inv_idx_tid_ = inv_idx_tid;
     tr_info.fwd_idx_tid_ = fwd_idx_tid;
