@@ -1222,6 +1222,7 @@ public:
   int get_column_ids_without_rowkey(common::ObIArray<share::schema::ObColDesc> &column_ids, const bool no_virtual = false) const;
   int get_generated_column_ids(common::ObIArray<uint64_t> &column_ids) const;
   inline bool has_generated_column() const { return generated_columns_.num_members() > 0; }
+  bool has_ai_column() const;
   int has_not_null_unique_key(ObSchemaGetterGuard &schema_guard, bool &bool_result) const;
   // returns true when user defined primary key is given
   // Return true: User explicitly specified the primary key column (IOT mode and HEAP mode);

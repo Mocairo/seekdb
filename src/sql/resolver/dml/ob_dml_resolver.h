@@ -487,6 +487,9 @@ protected:
   int generate_ddl_sample_info_if_needed(TableItem &table_item);
 
 protected:
+  int is_ai_result_column(const ObColumnRefRawExpr *column, const ObDMLStmt *statement, bool &is_ai);
+  int check_ai_column_assignment(const ObColumnRefRawExpr *column, const ObDMLStmt *statement);
+  int record_ai_column_read_reference(ObRawExpr *expression);
   int check_basic_column_generated(const ObColumnRefRawExpr *col_expr,
                                   ObDMLStmt *dml_stmt,
                                   bool &is_generated);

@@ -86,7 +86,7 @@ def _resolve_share_header(include, source, share_root, headers):
         candidates.append((source_relative.parent / include).as_posix())
     candidates.append(include)
     for candidate in candidates:
-        normalized = str(Path(candidate))
+        normalized = Path(candidate).as_posix()
         if normalized in headers:
             return normalized
     return None

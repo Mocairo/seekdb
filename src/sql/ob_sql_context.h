@@ -550,6 +550,9 @@ public:
 struct ObQueryCtx
 {
 public:
+  // Original SQL references, before optimizer pruning and implicit DML columns.
+  // Consecutive entries are physical table ID and AI result column ID.
+  common::ObSEArray<uint64_t, 8> ai_column_read_refs_;
   ObQueryCtx()
     : question_marks_count_(0),
       calculable_items_(),

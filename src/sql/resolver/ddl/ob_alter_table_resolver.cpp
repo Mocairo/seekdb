@@ -151,6 +151,7 @@ int ObAlterTableResolver::resolve(const ParseNode &parse_tree)
     //resolve action list
     if (OB_SUCCESS == ret && NULL != parse_tree.children_[ACTION_LIST]){
       if (OB_FAIL(resolve_action_list(*(parse_tree.children_[ACTION_LIST])))) {
+      } else if (OB_FAIL(finalize_ai_alter_columns())) {
       } else if (OB_FAIL(set_table_options())) {
       } else if (OB_FAIL(check_semistruct_encoding_type(*table_schema_, alter_table_stmt->get_alter_table_schema()))) {
       } else {
@@ -347,6 +348,17 @@ int ObAlterTableResolver::check_alter_column_schemas_valid(ObAlterTableStmt &stm
 int ObAlterTableResolver::resolve_action_list(const ParseNode &node)
 {
   int ret = OB_SUCCESS;
+  for (int64_t i = 0; i < node.num_child_ && node.children_ != nullptr; ++i) {
+    if (node.children_[i] != nullptr && node.children_[i]->type_ == T_RETRY_AI_COLUMN) {
+      if (node.num_child_ != 1) {
+        ret = OB_NOT_SUPPORTED;
+        LOG_USER_ERROR(OB_NOT_SUPPORTED,
+                       "combining AI COLUMN RETRY with another ALTER action");
+        return ret;
+      }
+      return resolve_ai_retry(*node.children_[i]);
+    }
+  }
   ObAlterTableStmt *alter_table_stmt = get_alter_table_stmt();
   if (OB_UNLIKELY(node.num_child_ <= 0) || OB_ISNULL(node.children_)) {
     ret = OB_ERR_UNEXPECTED;

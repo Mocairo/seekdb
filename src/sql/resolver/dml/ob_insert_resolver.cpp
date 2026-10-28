@@ -140,6 +140,7 @@ int ObInsertResolver::resolve_insert_clause(const ParseNode &node)
   if (OB_FAIL(ret)) {
   } else if (OB_FAIL(generate_autoinc_params(insert_stmt->get_insert_table_info()))) {
   } else if (OB_FAIL(generate_column_conv_function(insert_stmt->get_insert_table_info()))) {
+  } else if (OB_FAIL(initialize_ai_insert_columns(insert_stmt->get_insert_table_info()))) {
   } else if (OB_FAIL(replace_gen_col_dependent_col(insert_stmt->get_insert_table_info()))) {
   }
   

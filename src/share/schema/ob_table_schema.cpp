@@ -18,6 +18,7 @@
 #include "common/datum/ob_datum.h"
 #include "share/schema/ob_col_desc.h"  // ObColDesc complete type(previously hidden behind the ddl_common include chain)
 #include "ob_table_schema.h"
+#include "share/schema/ob_column_schema.h"
 #include "lib/compress/ob_compressor_pool.h"
 #include "share/schema/ob_partition_array_utils.h"
 #include "share/schema/ob_part_mgr_util.h"
@@ -4765,6 +4766,15 @@ int ObTableSchema::get_column_ids_without_rowkey(
     }
   }
   return ret;
+}
+
+bool ObTableSchema::has_ai_column() const
+{
+  bool found = false;
+  for (auto it = column_begin(); !found && it != column_end(); ++it) {
+    found = (*it)->is_ai_column();
+  }
+  return found;
 }
 
 int ObTableSchema::get_generated_column_ids(ObIArray<uint64_t> &column_ids) const

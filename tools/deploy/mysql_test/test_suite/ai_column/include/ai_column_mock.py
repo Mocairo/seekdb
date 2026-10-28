@@ -44,10 +44,10 @@ def stop_server(port):
         for _ in range(50):
             try:
                 os.kill(pid, 0)
-            except ProcessLookupError:
+            except (ProcessLookupError, OSError):
                 break
             time.sleep(0.02)
-    except (ValueError, ProcessLookupError):
+    except (ValueError, ProcessLookupError, OSError):
         pass
     try:
         os.unlink(pid_path)

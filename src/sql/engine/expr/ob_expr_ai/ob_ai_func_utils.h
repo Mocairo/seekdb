@@ -348,11 +348,14 @@ public:
   ObAIFuncModel(ObIAllocator &allocator, const ObAIFuncExprInfo &info, const share::ObAiModelEndpointInfo &endpoint_info)
   : allocator_(&allocator),
     info_(info),
-    endpoint_info_(endpoint_info)
+    endpoint_info_(endpoint_info), single_attempt_(false)
   {}
    virtual ~ObAIFuncModel() {}
    // completion
-   int call_completion(ObString &prompt, ObJsonObject *config, ObString &result);
+   int call_completion(ObString &prompt, ObJsonObject *config, ObString &result,
+                       const ObString &system_prompt = ObString());
+   // Async AI COLUMN persists its retry budget before sending each request.
+   void set_single_attempt(bool value) { single_attempt_ = value; }
    int call_completion_vector(ObArray<ObString> &prompts, ObJsonObject *config, ObArray<ObString> &results);
    // dense_embedding
    int call_dense_embedding(ObString &content, ObJsonObject *config, ObString &result);
@@ -368,6 +371,7 @@ public:
    ObIAllocator *allocator_;
    const ObAIFuncExprInfo &info_;
    const share::ObAiModelEndpointInfo &endpoint_info_;
+   bool single_attempt_;
    DISALLOW_COPY_AND_ASSIGN(ObAIFuncModel);
 };
 

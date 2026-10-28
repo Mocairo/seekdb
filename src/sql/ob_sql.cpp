@@ -2370,6 +2370,8 @@ int ObSql::generate_plan(ParseResult &parse_result,
     }
 
     if (OB_SUCC(ret)) {
+      ret = phy_plan->ai_column_read_refs_.assign(stmt->get_query_ctx()->ai_column_read_refs_);
+      if (!phy_plan->ai_column_read_refs_.empty()) { phy_plan->set_has_nested_sql(true); }
       phy_plan->set_fetch_cur_time(stmt->get_fetch_cur_time());
       phy_plan->set_stmt_type(stmt->get_stmt_type());
       phy_plan->set_literal_stmt_type(stmt->get_query_ctx()->get_literal_stmt_type());

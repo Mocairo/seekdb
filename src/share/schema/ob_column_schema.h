@@ -22,6 +22,7 @@
 #include "lib/container/ob_array.h"
 #include "lib/hash/ob_hashmap.h"
 #include "share/schema/ob_schema_struct.h"
+#include "share/schema/ob_ai_column_schema.h"
 #include "share/schema/ob_schema_utils.h"
 #include "common/rowkey/ob_rowkey_info.h"
 
@@ -65,6 +66,9 @@ bool operator==(const ObColumnSchemaV2 &r) const;
 bool operator!=(const ObColumnSchemaV2 &r) const;
 
 int assign(const ObColumnSchemaV2 &src_schema);
+  bool is_ai_column() const { return ai_column_schema_.enabled(); }
+  AiColumnSchema &get_ai_column_schema() { return ai_column_schema_; }
+  const AiColumnSchema &get_ai_column_schema() const { return ai_column_schema_; }
 
 //set methods
   
@@ -398,6 +402,7 @@ private:
   ObSkipIndexColumnAttr skip_index_attr_;
   int64_t lob_chunk_size_;
   share::ObLocalSessionVar local_session_vars_;
+  AiColumnSchema ai_column_schema_;
 };
 
 inline int32_t ObColumnSchemaV2::get_data_length() const

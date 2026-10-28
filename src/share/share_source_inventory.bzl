@@ -383,6 +383,9 @@ SHARE_UNITY_GROUPS = [
         srcs = [
             "src/share/schema/ob_col_desc.cpp",
             "src/share/schema/ob_column_schema.cpp",
+            "src/share/schema/ob_ai_column_schema.cpp",
+            "src/share/ai_column/ai_column_metadata_store.cpp",
+            "src/share/ai_column/ai_column_task_store.cpp",
             "src/share/schema/ob_constraint.cpp",
             "src/share/schema/ob_database_sql_service.cpp",
             "src/share/schema/ob_ddl_sql_service.cpp",

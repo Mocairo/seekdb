@@ -160,6 +160,11 @@ protected:
                                                const ObDMLStmt *stmt);
 
   int generate_column_conv_function(ObInsertTableInfo &table_info);
+  int initialize_ai_insert_columns(ObInsertTableInfo &table_info);
+  int add_ai_update_assignments(ObTableAssignment &assignments, const TableItem &table_item,
+                               const share::schema::ObTableSchema &table_schema);
+  int build_ai_request_expr(ObRawExpr *&expression);
+  int build_ai_change_condition(ObRawExpr *before, ObRawExpr *after, ObRawExpr *&changed);
 
   virtual int find_value_desc(ObInsertTableInfo &table_info, uint64_t column_id, ObRawExpr *&column_ref);
 

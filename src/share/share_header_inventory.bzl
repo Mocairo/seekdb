@@ -2,6 +2,8 @@
 
 SHARE_PUBLIC_HEADER_ROOTS = [
     "aggregate/ob_pushdown_aggregate_protocol.h",
+    "ai_column/ai_column_state.h",
+    "ai_column/ai_column_task_store.h",
     "ai_service/ob_ai_service_struct.h",
     "allocator/ob_reserve_arena.h",
     "autoincrement/ob_i_tablet_autoincrement_admin.h",
@@ -160,6 +162,7 @@ SHARE_PUBLIC_HEADER_ROOTS = [
     "ob_tablet_meta_table_compaction_operator.h",
     "ob_task_define.h",
     "ob_telemetry.h",
+    "ob_tenant_role_transition_service.h",
     "ob_thread_pool.h",
     "ob_throttling_utils.h",
     "ob_time_utility2.h",
@@ -180,6 +183,7 @@ SHARE_PUBLIC_HEADER_ROOTS = [
     "rc/ob_server_module_init_ctx.h",
     "rc/ob_server_runtime.h",
     "redolog/ob_log_file_handler.h",
+    "resource/ob_server_resource.h",
     "resource/ob_server_resource_config.h",
     "resource/ob_server_runtime_config.h",
     "resource_limit_calculator/ob_resource_limit_calculator.h",
@@ -307,9 +311,9 @@ SHARE_INTERFACE_CLOSURE_HEADERS = [
     "redolog/ob_log_definition.h",
     "redolog/ob_log_file_group.h",
     "redolog/ob_log_policy.h",
-    "resource/ob_server_resource.h",
     "resource_limit_calculator/ob_resource_commmon.h",
     "resource_limit_calculator/ob_resource_limit_calculator_def.h",
+    "schema/ob_ai_column_schema.h",
     "schema/ob_ai_model_mgr.h",
     "schema/ob_ddl_epoch.h",
     "schema/ob_mock_fk_parent_table_mgr.h",
@@ -333,6 +337,7 @@ SHARE_INTERFACE_CLOSURE_HEADERS = [
 ]
 
 SHARE_PRIVATE_HEADERS = [
+    "ai_column/ai_column_metadata_store.h",
     "datum/ob_datum_funcs_compilation/ob_datum_funcs_compilation.ipp",
     "datum/ob_datum_funcs_impl.h",
     "datum/ob_str_datum_funcs_compilation/ob_str_datum_funcs_compilation.ipp",

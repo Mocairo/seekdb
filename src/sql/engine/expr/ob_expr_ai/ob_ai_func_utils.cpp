@@ -1352,7 +1352,8 @@ int ObAIFuncUtils::get_ai_func_info(ObIAllocator &allocator, const ObString &mod
   return ret;
 }
 
-int ObAIFuncModel::call_completion(ObString &prompt, ObJsonObject *config, ObString &result)
+int ObAIFuncModel::call_completion(ObString &prompt, ObJsonObject *config, ObString &result,
+                                 const ObString &system_prompt)
 {
   int ret = OB_SUCCESS;
   ObArray<ObString> headers;
@@ -1360,9 +1361,13 @@ int ObAIFuncModel::call_completion(ObString &prompt, ObJsonObject *config, ObStr
   ObJsonObject *response = nullptr;
   ObIJsonBase *result_base = nullptr;
   ObAIFuncIComplete *complete_provider = nullptr;
-  ObString prompt_str;
+  ObString prompt_str = system_prompt;
   ObString result_str;
   ObAIFuncClient client;
+  if (single_attempt_) {
+    client.set_max_retry_times(0);
+    client.set_timeout_sec(10);
+  }
   ObString unencrypted_access_key;
   ObString request_model_name = get_request_model_name();
   if (!is_completion_type()) {
@@ -1514,6 +1519,10 @@ int ObAIFuncModel::call_dense_embedding_vector_v2(ObArray<ObString> &content,
   ObIJsonBase *result_base = nullptr;
   ObAIFuncIEmbed *provider = nullptr;
   ObAIFuncClient client;
+  if (single_attempt_) {
+    client.set_max_retry_times(0);
+    client.set_timeout_sec(10);
+  }
   ObString key;
   ObString model = get_request_model_name();
   int64_t dimension = 0;

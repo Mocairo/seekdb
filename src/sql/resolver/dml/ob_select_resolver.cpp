@@ -1667,6 +1667,7 @@ int ObSelectResolver::expand_target_list(
   for (int64_t i = 0; OB_SUCC(ret) && i < column_items.count(); ++i) {
     const ColumnItem &col_item = column_items.at(i);
     SelectItem tmp_select_item;
+    if (OB_FAIL(record_ai_column_read_reference(col_item.expr_))) { break; }
     if (table_item.is_generated_table() || table_item.is_temp_table()) {
       if (OB_ISNULL(table_item.ref_query_) || i >= table_item.ref_query_->get_select_item_size()) {
         ret = OB_INVALID_ARGUMENT;

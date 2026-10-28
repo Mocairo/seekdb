@@ -244,6 +244,9 @@ int ObSQLSessionInfo::test_init(uint32_t version, uint32_t sessid,
 
 void ObSQLSessionInfo::reset(bool skip_sys_var)
 {
+  ai_column_internal_read_ = false;
+  ai_column_internal_write_ = false;
+  ai_column_retry_id_ = OB_INVALID_ID;
   if (is_inited_) {
     // ObVersionProvider::reset();
     warnings_buf_.reset();

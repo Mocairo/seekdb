@@ -59,7 +59,8 @@ public:
   static int gen_column_dml_without_check(
       const ObColumnSchemaV2 &column,
       share::ObDMLSqlSplicer &dml,
-      const bool is_history = false);
+      const bool is_history = false,
+      const bool include_ai_column_info = false);
   virtual int batch_create_table(ObIArray<ObTableSchema> &tables,
                            common::ObISQLClient &sql_client,
                            const common::ObString *ddl_stmt_str = NULL,
@@ -402,7 +403,8 @@ private:
                             share::ObDMLSqlSplicer &dml);
   static int gen_column_dml(const ObColumnSchemaV2 &column,
       share::ObDMLSqlSplicer &dml,
-      const bool is_history = false);
+      const bool is_history = false,
+      const bool include_ai_column_info = false);
   int gen_constraint_dml(const ObConstraint &constraint, share::ObDMLSqlSplicer &dml);
   int gen_constraint_column_dml(
       const ObConstraint &constraint,

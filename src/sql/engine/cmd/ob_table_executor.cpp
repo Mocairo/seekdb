@@ -754,6 +754,23 @@ int ObAlterTableExecutor::alter_table_exchange_partition_rpc(obcall::ObExchangeP
 int ObAlterTableExecutor::execute(ObExecContext &ctx, ObAlterTableStmt &stmt)
 {
   int ret = OB_SUCCESS;
+  if (stmt.ai_retry_column_id_ != OB_INVALID_ID) {
+    auto *session = ctx.get_my_session();
+    sqlclient::ObISQLConnectionGuard connection;
+    if (session == nullptr || stmt.ai_retry_sql_.empty()) { return OB_ERR_UNEXPECTED; }
+    const uint64_t old_retry = session->ai_column_retry_id();
+    session->set_ai_column_retry_id(stmt.ai_retry_column_id_);
+    if (OB_FAIL(query::ObInnerSQLConnectionAccess::create_connection_with_external_session(session, connection))) {
+    } else if (connection.get_ptr() == nullptr) { ret = OB_ERR_UNEXPECTED; }
+    else {
+      int64_t affected = 0;
+      ObBasicSessionInfo::UserScopeGuard user_scope(session->get_sql_scope_flags());
+      connection.get_ptr()->set_check_priv(true);
+      ret = connection.get_ptr()->execute_write(stmt.ai_retry_sql_, affected, true);
+    }
+    session->set_ai_column_retry_id(old_retry);
+    return ret;
+  }
   ObSqlExecutorCtx *task_exec_ctx = NULL;
   obcall::ObAlterTableArg &alter_table_arg = stmt.get_alter_table_arg();
   obcall::ObExchangePartitionArg &exchange_partition_arg = stmt.get_exchange_partition_arg();

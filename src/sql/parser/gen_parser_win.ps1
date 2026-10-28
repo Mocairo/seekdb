@@ -4,6 +4,8 @@
 
 $ErrorActionPreference = "Stop"
 $ParserDir = $PSScriptRoot
+Push-Location -LiteralPath $ParserDir
+try {
 $RepoRoot = (Resolve-Path (Join-Path $ParserDir "../../..")).Path
 $DevToolsBin = Join-Path $RepoRoot "deps/3rd/usr/local/oceanbase/devtools/bin"
 $BisonShare = Join-Path $RepoRoot "deps/3rd/usr/local/oceanbase/devtools/share/bison"
@@ -166,6 +168,7 @@ function Generate-Parser {
     Patch-FileRegex $ftsparserTabC 'yychar = yylex \(&yylval, &yylloc\);' 'yychar = yylex (&yylval, &yylloc, YYLEX_PARAM);'
 
     & $FLEX_BIN -Cfa -B -8 -o (Join-Path $ParserDir "ftsblex_lex.c") (Join-Path $ParserDir "ftsblex.l") $ftsparserTabH
+    if ($LASTEXITCODE -ne 0) { throw "flex failed generating the FTS lexer" }
 
     $ftslex = Join-Path $ParserDir "ftsblex_lex.c"
     Remove-LinesContaining $ftslex "This var may be unused depending upon options"
@@ -191,6 +194,7 @@ function Generate-Parser {
     Bison-Parser (Join-Path $ParserDir "sql_parser_mysql_mode.y") $mysqlTabC $mysqlOutput
 
     & $FLEX_BIN -Cfa -B -8 -o (Join-Path $ParserDir "sql_parser_mysql_mode_lex.c") (Join-Path $ParserDir "sql_parser_mysql_mode.l") (Join-Path $ParserDir "sql_parser_mysql_mode_tab.h")
+    if ($LASTEXITCODE -ne 0) { throw "flex failed generating the MySQL lexer" }
 
     $mysqlLex = Join-Path $ParserDir "sql_parser_mysql_mode_lex.c"
     $mysqlContent = [System.IO.File]::ReadAllText($mysqlLex)
@@ -285,3 +289,6 @@ function Apply-FinalParserPatches {
     }
 }
 Apply-FinalParserPatches
+} finally {
+    Pop-Location
+}

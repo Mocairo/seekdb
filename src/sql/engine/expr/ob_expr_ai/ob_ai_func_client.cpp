@@ -159,11 +159,15 @@ int ObAIFuncClient::send_post(ObJsonObject *data, ObJsonObject *&response)
         // retry
       } else if (!is_retryable_status_code(http_code)) {
         break;
-      } else {
+      } else if (i < max_retry_times_) {
         LOG_WARN("retryable http status code", K(http_code), K(i));
         int64_t delay_ms = 1000 * (1 << i) + rand() % 1000;
         ob_usleep(delay_ms * 1000);
         response_buf.reset();
+      } else {
+        // The caller owns any subsequent retry. Preserve the final response
+        // and return immediately when no HTTP attempt remains in this client.
+        break;
       }
     }
     if (OB_SUCC(ret)) {

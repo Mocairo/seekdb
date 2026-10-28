@@ -62,6 +62,7 @@ autom4te.cache/
 build
 build/
 build_*/
+/build-*/
 build_version.c
 build_version.cpp
 compile

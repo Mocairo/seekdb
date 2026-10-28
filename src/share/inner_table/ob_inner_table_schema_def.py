@@ -342,7 +342,8 @@ all_column_def = dict(
       ('sub_data_type', 'int', 'false', '0'),
       ('skip_index_attr', 'int', 'false', '0'),
       ('lob_chunk_size', 'int', 'false', 'OB_DEFAULT_LOB_CHUNK_SIZE'),
-      ('local_session_vars', 'longtext', 'true')
+      ('local_session_vars', 'longtext', 'true'),
+      ('ai_column_info', 'longtext', 'true')
   ]
   )
 
@@ -2447,6 +2448,8 @@ all_ai_model_endpoint_def = dict(
 def_table_schema(**all_ai_model_endpoint_def)
 
 
+
+
 all_objauth_mysql_def = dict(
     owner = 'cjl476581',
     table_name     = '__all_objauth_mysql',
@@ -2466,6 +2469,81 @@ all_objauth_mysql_def = dict(
   )
 def_table_schema(**all_objauth_mysql_def)
 def_table_schema(**gen_history_table_def(1134, all_objauth_mysql_def))
+
+all_ai_column_def = dict(
+    owner = 'seekdb',
+    table_name = '__all_ai_column',
+    table_id = '1135',
+    table_type = 'SYSTEM_TABLE',
+    gm_columns = ['gmt_create', 'gmt_modified'],
+    is_cluster_private = False,
+    meta_record_in_sys = False,
+    rowkey_columns = [('table_id', 'int'), ('column_id', 'int')],
+    normal_columns = [
+        ('column_name', 'varchar:OB_MAX_COLUMN_NAME_LENGTH', 'false'),
+        ('original_expr', 'longtext', 'false'),
+        ('normalized_expr', 'longtext', 'false'),
+        ('dependency_column_ids', 'longtext', 'false'),
+        ('sync_mode', 'varchar:16', 'false', 'async'),
+        ('max_retries', 'int', 'false', 2),
+        ('definition_version', 'int', 'false'),
+        ('state_column_id', 'int', 'false'),
+        ('request_column_id', 'int', 'false'),
+        ('result_spec_column_id', 'int', 'false'),
+        ('row_incarnation_column_id', 'int', 'false'),
+    ]
+)
+def_table_schema(**all_ai_column_def)
+
+all_ai_column_task_def = dict(
+    owner = 'seekdb',
+    table_name = '__all_ai_column_task',
+    table_id = '1136',
+    table_type = 'SYSTEM_TABLE',
+    gm_columns = ['gmt_create', 'gmt_modified'],
+    is_cluster_private = False,
+    meta_record_in_sys = False,
+    rowkey_columns = [('task_id', 'varchar:32')],
+    normal_columns = [
+        ('table_id', 'int', 'false'),
+        ('column_id', 'int', 'false'),
+        ('row_incarnation', 'varchar:32', 'false'),
+        ('request_id', 'varchar:32', 'false'),
+        ('definition_version', 'int', 'false'),
+        ('rowkey_predicate', 'longtext', 'false'),
+        ('input_snapshot', 'longtext', 'false'),
+        ('state', 'int', 'false', 0),
+        ('max_retries', 'int', 'false', 2),
+        ('retry_count', 'int', 'false', 0),
+        ('attempt_count', 'int', 'false', 0),
+        ('eligible_ts', 'timestamp:6', 'false'),
+        ('lease_owner', 'varchar:32', 'true'),
+        ('lease_deadline', 'timestamp:6', 'true'),
+        ('claim_epoch', 'int', 'false', 0),
+        ('result_value', 'longblob', 'true'),
+        ('error_code', 'int', 'true'),
+        ('error_message', 'longtext', 'true'),
+    ]
+)
+def_table_schema(**all_ai_column_task_def)
+
+all_ai_column_group_def = dict(
+    owner = 'seekdb',
+    table_name = '__all_ai_column_group',
+    table_id = '1137',
+    table_type = 'SYSTEM_TABLE',
+    gm_columns = ['gmt_create', 'gmt_modified'],
+    is_cluster_private = False,
+    meta_record_in_sys = False,
+    rowkey_columns = [('request_id', 'varchar:32')],
+    normal_columns = [
+        ('table_id', 'int', 'false'),
+        ('row_incarnation', 'varchar:32', 'false'),
+        ('rowkey_predicate', 'longtext', 'false'),
+        ('member_column_ids', 'longtext', 'false'),
+    ]
+)
+def_table_schema(**all_ai_column_group_def)
 
 
 # Reserved position (placeholder before this line)

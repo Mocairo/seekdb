@@ -17,6 +17,7 @@
 #define USING_LOG_PREFIX SERVER_OMT
 #include "ob_ai_service.h"
 #include "observer/ai_service/ob_ai_service_executor.h"
+#include "observer/ai_service/ai_column_worker.h"
 #include "sql/privilege_check/ob_ai_model_priv_util.h"
 #include "sql/session/ob_sql_session_info.h"
 #include "sql/engine/ob_exec_context.h"
@@ -61,7 +62,36 @@ int ObAiService::init()
 
 void ObAiService::destroy()
 {
+  stop();
+  wait();
+  if (column_worker_ != nullptr) {
+    using observer::AiColumnWorker;
+    OB_DELETE(AiColumnWorker, "AiColumnWorker", column_worker_);
+    column_worker_ = nullptr;
+  }
   is_inited_ = false;
+}
+
+int ObAiService::start()
+{
+  int ret = OB_SUCCESS;
+  if (!is_inited_ || GCTX.sql_proxy_ == nullptr) { ret = OB_NOT_INIT; }
+  else if (column_worker_ != nullptr) { ret = OB_INIT_TWICE; }
+  else if ((column_worker_ = OB_NEW(observer::AiColumnWorker, "AiColumnWorker")) == nullptr) {
+    ret = OB_ALLOCATE_MEMORY_FAILED;
+  } else if (OB_FAIL(column_worker_->init(*GCTX.sql_proxy_))) {
+  } else { ret = column_worker_->start(); }
+  return ret;
+}
+
+void ObAiService::stop()
+{
+  if (column_worker_ != nullptr) { column_worker_->stop(); }
+}
+
+void ObAiService::wait()
+{
+  if (column_worker_ != nullptr) { column_worker_->wait(); }
 }
 
 int ObAiService::get_ai_service_guard(ObAiServiceGuard &ai_service_guard)

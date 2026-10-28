@@ -6,6 +6,7 @@ OBSERVER_UNITY_GROUPS = [
         language = "c++",
         srcs = [
             "src/observer/ai_service/ob_ai_service_proxy.cpp",
+            "src/observer/ai_service/ai_column_worker.cpp",
             "src/observer/ai_service/ob_ai_service_executor.cpp",
             "src/observer/ob_system_package_load_service.cpp",
             "src/observer/ob_tablet_runtime_meta_updater.cpp",

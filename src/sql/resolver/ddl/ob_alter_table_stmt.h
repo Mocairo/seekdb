@@ -34,6 +34,8 @@ class ObAlterTableStmt : public ObTableStmt
 public:
   explicit ObAlterTableStmt(common::ObIAllocator *name_pool);
   ObAlterTableStmt();
+  uint64_t ai_retry_column_id_ = common::OB_INVALID_ID;
+  common::ObString ai_retry_sql_;
   virtual ~ObAlterTableStmt();
   int add_column(const share::schema::AlterColumnSchema &column_schema);
   int add_index_arg(obcall::ObIndexArg *index_arg);

@@ -185,6 +185,13 @@ class ObSQLSessionInfo: public common::ObVersionProvider, public ObBasicSessionI
   OB_UNIS_VERSION(1);
 public:
   friend class LinkExecCtxGuard;
+  // Kernel-only scopes; these have no SQL variable or serialized representation.
+  bool ai_column_internal_read() const { return ai_column_internal_read_; }
+  bool ai_column_internal_write() const { return ai_column_internal_write_; }
+  void set_ai_column_internal_read(bool value) { ai_column_internal_read_ = value; }
+  void set_ai_column_internal_write(bool value) { ai_column_internal_write_ = value; }
+  uint64_t ai_column_retry_id() const { return ai_column_retry_id_; }
+  void set_ai_column_retry_id(uint64_t value) { ai_column_retry_id_ = value; }
   // notice!!! register exec ctx to session for later access
   // used for temp session, such as session for rpc processor, px worker, das processor, etc
   // not used for main session
@@ -1030,6 +1037,9 @@ private:
   void *tx_ctx_cache_;
   common::ObString audit_filter_name_;
   ObExecutingSqlStatRecord executing_sql_stat_record_;
+  bool ai_column_internal_read_ = false;
+  bool ai_column_internal_write_ = false;
+  uint64_t ai_column_retry_id_ = common::OB_INVALID_ID;
 };
 
 

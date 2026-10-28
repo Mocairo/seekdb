@@ -2094,6 +2094,21 @@ int ObDmlCgService::generate_dml_base_ctdef(ObLogicalOperator &op,
 {
   int ret = OB_SUCCESS;
   dml_base_ctdef.is_primary_index_ = index_dml_info.is_primary_index_;
+  if (index_dml_info.is_primary_index_) {
+    const ObTableSchema *table = nullptr;
+    if (OB_FAIL(cg_.opt_ctx_->get_schema_guard()->get_table_schema(index_dml_info.ref_table_id_, table))) {
+      return ret;
+    } else if (table == nullptr) {
+      return OB_ERR_UNEXPECTED;
+    } else {
+      dml_base_ctdef.has_ai_column_ = table->has_ai_column()
+          && !cg_.opt_ctx_->get_session_info()->ai_column_internal_write();
+      if (dml_base_ctdef.has_ai_column_) {
+        cg_.phy_plan_->set_has_nested_sql(true);
+        cg_.phy_plan_->set_need_serial_exec(true);
+      }
+    }
+  }
   dml_base_ctdef.is_vec_hnsw_index_vid_opt_ = index_dml_info.is_vec_hnsw_index_vid_opt_;
   dml_base_ctdef.column_ids_.set_capacity(index_dml_info.column_exprs_.count());
   if (OB_FAIL(generate_dml_column_ids(op, index_dml_info.column_exprs_, dml_base_ctdef.column_ids_))) {
@@ -2170,6 +2185,13 @@ int ObDmlCgService::convert_triggers(ObLogDelUpd &log_op,
                                      uint64_t dml_event)
 {
   int ret = OB_SUCCESS;
+  const auto *plan = log_op.get_plan();
+  const auto *session = plan == nullptr ? nullptr : plan->get_optimizer_context().get_session_info();
+  if (session != nullptr && (session->ai_column_internal_write() || session->ai_column_retry_id() != OB_INVALID_ID)) {
+    // AI publication and retry update stored derived values, not business data.
+    // Indexes and generated columns still follow the ordinary DML pipeline.
+    return OB_SUCCESS;
+  }
   if (OB_FAIL(convert_normal_triggers(log_op, dml_info, dml_ctdef, dml_event))) {
   }
   return ret;
@@ -2314,7 +2336,9 @@ int ObDmlCgService::convert_normal_triggers(ObLogDelUpd &log_op,
           ret = OB_ERR_UNEXPECTED;
         } else {
           is_hidden = column_schema->is_hidden();
-          is_gen_col = column_schema->is_generated_column();
+          // Re-evaluate an AI invalidation expression after BEFORE trigger
+          // writes NEW dependencies; never copy a trigger-assigned AI result.
+          is_gen_col = column_schema->is_generated_column() || column_schema->is_ai_column();
           is_gen_col_dep = column_schema->has_generated_column_deps();
           is_update = has_exist_in_array(updated_column_ids, column_schema->get_column_id());
           if (!has_exist_in_array(column_ids, column_schema->get_column_id(), &col_idx)) {

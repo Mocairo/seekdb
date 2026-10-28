@@ -55,7 +55,17 @@ ob_define(OB_BUILD_SYS_VEC_IDX ON)
 if(WIN32)
   # This value is already inherited by CMake. Avoid starting another shell,
   # which is not available in all non-interactive Windows build environments.
-  set(ARCHITECTURE "$ENV{PROCESSOR_ARCHITECTURE}")
+  # Configuration must also work in non-interactive hosts without Windows
+  # PowerShell. CMake already has access to the native process environment.
+  if(NOT ARCHITECTURE)
+    set(ARCHITECTURE "$ENV{PROCESSOR_ARCHITEW6432}")
+  endif()
+  if(NOT ARCHITECTURE)
+    set(ARCHITECTURE "$ENV{PROCESSOR_ARCHITECTURE}")
+  endif()
+  if(NOT ARCHITECTURE)
+    set(ARCHITECTURE "${CMAKE_HOST_SYSTEM_PROCESSOR}")
+  endif()
   STRING(TOLOWER "${ARCHITECTURE}" ARCHITECTURE)
   STRING(STRIP "${ARCHITECTURE}" ARCHITECTURE)
 elseif(OB_ANDROID)
@@ -117,7 +127,7 @@ endif()
 
 message(STATUS "Using C++20 standard")
 if(WIN32)
-  set(CMAKE_CXX_FLAGS "/std:c++20")
+  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /std:c++20")
   set(DEBUG_PREFIX "")
   set(FILE_PREFIX "")
 elseif(OB_ANDROID)
@@ -417,11 +427,11 @@ option(OB_ENABLE_AVX2 "enable AVX2 and related instruction set support for x86_6
 
 include(CMakeFindBinUtils)
 
-if(${ARCHITECTURE} STREQUAL "amd64")
+if("${ARCHITECTURE}" STREQUAL "amd64")
   set(MARCH_CFLAGS "")
   set(MTUNE_CFLAGS "-mtune=generic")
   set(ARCH_LDFLAGS "")
-elseif(${ARCHITECTURE} STREQUAL "x86_64")
+elseif("${ARCHITECTURE}" STREQUAL "x86_64")
   set(MTUNE_CFLAGS -mtune=core2)
   set(ARCH_LDFLAGS "")
 else()

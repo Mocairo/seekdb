@@ -1,0 +1,7 @@
+cmake_minimum_required(VERSION 3.24)
+project(seekdb_ai_column_state_tests LANGUAGES CXX)
+enable_testing()
+add_executable(ai_column_state_test test_ai_column_state.cpp)
+target_compile_features(ai_column_state_test PRIVATE cxx_std_20)
+target_include_directories(ai_column_state_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../../../src")
+add_test(NAME ai_column_state COMMAND ai_column_state_test)

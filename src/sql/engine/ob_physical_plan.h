@@ -168,6 +168,7 @@ public:
 
   void set_is_update_uniq_index(bool is_update_uniq_index) { is_update_uniq_index_ = is_update_uniq_index; }
   bool get_is_update_uniq_index() const { return is_update_uniq_index_; }
+  common::ObSEArray<uint64_t, 8> ai_column_read_refs_;
 
   void set_for_update(bool is_sfu) { is_sfu_ = is_sfu_ || is_sfu; }
   bool has_for_update() const { return is_sfu_; }

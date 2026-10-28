@@ -30,14 +30,14 @@ namespace schema
 
 ObColumnSchemaV2::ObColumnSchemaV2()
     : ObSchema(),
-    local_session_vars_(get_allocator())
+    local_session_vars_(get_allocator()), ai_column_schema_(get_allocator())
 {
   reset();
 }
 
 ObColumnSchemaV2::ObColumnSchemaV2(ObIAllocator *allocator)
     : ObSchema(allocator),
-    local_session_vars_(allocator)
+    local_session_vars_(allocator), ai_column_schema_(get_allocator())
 {
   reset();
 }
@@ -83,6 +83,7 @@ int ObColumnSchemaV2::assign(const ObColumnSchemaV2 &src_schema)
     } else if (OB_FAIL(deep_copy_str(src_schema.column_name_, column_name_))) {
     } else if (OB_FAIL(deep_copy_str(src_schema.comment_, comment_))) {
     } else if (OB_FAIL(set_extended_type_info(src_schema.extended_type_info_))) {
+    } else if (OB_FAIL(ai_column_schema_.assign(src_schema.ai_column_schema_))) {
     } else if (src_schema.column_ref_idxs_ != NULL) {
       if (OB_FAIL(alloc_column_ref_set())) {
       } else if (OB_FAIL(column_ref_idxs_->add_members(*src_schema.column_ref_idxs_))) {
@@ -128,6 +129,7 @@ int64_t ObColumnSchemaV2::get_convert_size() const
     convert_size += extended_type_info_.at(i).length() + 1;
   }
   convert_size += local_session_vars_.get_deep_copy_size();
+  convert_size += ai_column_schema_.get_convert_size() - sizeof(AiColumnSchema);
   return convert_size;
 }
 
@@ -188,6 +190,7 @@ void ObColumnSchemaV2::reset()
   skip_index_attr_.reset();
   lob_chunk_size_ = OB_DEFAULT_LOB_CHUNK_SIZE;
   local_session_vars_.reset();
+  ai_column_schema_.reset();
   ObSchema::reset();
 }
 
@@ -235,7 +238,7 @@ OB_DEF_SERIALIZE(ObColumnSchemaV2)
                 sub_type_,
                 skip_index_attr_,
                 lob_chunk_size_,
-                local_session_vars_);
+                local_session_vars_, ai_column_schema_);
   }
 
   return ret;
@@ -249,6 +252,7 @@ OB_DEF_DESERIALIZE(ObColumnSchemaV2)
   ObString column_name;
   ObString comment;
   bool has_column_ref = false;
+  ai_column_schema_.reset();
 
   LST_DO_CODE(OB_UNIS_DECODE,
               table_id_,
@@ -295,7 +299,7 @@ OB_DEF_DESERIALIZE(ObColumnSchemaV2)
                 sub_type_,
                 skip_index_attr_,
                 lob_chunk_size_,
-                local_session_vars_);
+                local_session_vars_, ai_column_schema_);
   }
   return ret;
 }
@@ -340,7 +344,7 @@ OB_DEF_SERIALIZE_SIZE(ObColumnSchemaV2)
               sub_type_,
               skip_index_attr_,
               lob_chunk_size_,
-              local_session_vars_);
+              local_session_vars_, ai_column_schema_);
   return len;
 }
 

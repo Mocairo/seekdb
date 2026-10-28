@@ -8,7 +8,7 @@
 
 use strict;
 use warnings;
-open my $fh, '<', "ob_errno.def";
+open my $fh, '<', "ob_errno.def" or die "open ob_errno.def: $!";
 my %map_share;
 my %other_map_share;
 my %map_deps;
@@ -107,7 +107,7 @@ my @errors = map {$_->[0]} @sorted;
 my @errnos = reverse sort { $a <=> $b } map {$map{$_}->[0]} keys %map;
 
 # generate share/ob_errno.h
-open my $fh_header, '>', "ob_errno.h";
+open my $fh_header, '>', "ob_errno.h" or die "write ob_errno.h: $!";
 print $fh_header '
 /*
  * Copyright (c) 2025 OceanBase.
@@ -196,7 +196,7 @@ constexpr int OB_ERR_SQL_END = -5999;
 ';
 
 #generate dep/ob_errno.h
-open my $fh_header_dep, '>', "../../src/oblib/lib/ob_errno.h";
+open my $fh_header_dep, '>', "../../src/oblib/lib/ob_errno.h" or die "write oblib/lib/ob_errno.h: $!";
 print $fh_header_dep '/*
  * Copyright (c) 2025 OceanBase.
  *
@@ -241,7 +241,7 @@ using namespace common; // maybe someone can fix
 
 
 # generate ob_errno.cpp
-open my $fh_cpp, '>', "ob_errno.cpp";
+open my $fh_cpp, '>', "ob_errno.cpp" or die "write ob_errno.cpp: $!";
 print $fh_cpp '
 /*
  * Copyright (c) 2025 OceanBase.

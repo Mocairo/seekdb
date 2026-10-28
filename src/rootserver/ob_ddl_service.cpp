@@ -7456,6 +7456,7 @@ int ObDDLService::fill_new_column_attributes(
     new_column_schema.set_skip_index_attr(alter_column_schema.get_skip_index_attr().get_packed_value());
     new_column_schema.set_lob_chunk_size(alter_column_schema.get_lob_chunk_size());
     if (OB_FAIL(new_column_schema.get_local_session_var().deep_copy(alter_column_schema.get_local_session_var()))) {
+    } else if (OB_FAIL(new_column_schema.get_ai_column_schema().assign(alter_column_schema.get_ai_column_schema()))) {
     }
   }
   return ret;
@@ -22531,6 +22532,9 @@ int ObDDLService::drop_column_online(
 #else
     ::localtime_r(&t.tv_sec, &tm);
 #endif
+    // Online DROP keeps the physical column until compaction. Retire its AI
+    // definition now so it cannot be scheduled or included in publication.
+    new_column_schema->get_ai_column_schema().reset();
     new_column_schema->set_unused();
     new_column_schema->set_prev_column_id(new_column_schema->get_column_id());
     new_column_schema->set_next_column_id(new_column_schema->get_column_id());

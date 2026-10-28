@@ -1028,6 +1028,14 @@ int ObSchemaRetrieveUtils::fill_column_schema(const bool check_deleted, T &resul
     EXTRACT_INT_FIELD_TO_CLASS_MYSQL_SKIP_RET(result, schema_version, column, int64_t);
     EXTRACT_VARCHAR_FIELD_TO_CLASS_MYSQL(result, column_name, column);
     EXTRACT_VARCHAR_FIELD_TO_CLASS_MYSQL(result, comment, column);
+    if (OB_SUCC(ret)) {
+      ObString ai_column_info;
+      EXTRACT_VARCHAR_FIELD_MYSQL_WITH_DEFAULT_VALUE(result, "ai_column_info", ai_column_info,
+          true /* skip_null_error */, true /* ignore_column_error */, ObString());
+      if (OB_SUCC(ret) && !ai_column_info.empty()) {
+        ret = column.get_ai_column_schema().from_storage(ai_column_info);
+      }
+    }
     EXTRACT_INT_FIELD_TO_CLASS_MYSQL_WITH_DEFAULT_VALUE(result, column_flags, column, int64_t, true, false, 0);
     EXTRACT_INT_FIELD_TO_CLASS_MYSQL_WITH_DEFAULT_VALUE(result, prev_column_id, column, uint64_t, true, false, UINT64_MAX);
     EXTRACT_INT_FIELD_TO_CLASS_MYSQL_WITH_DEFAULT_VALUE(result, srs_id, column, uint64_t, true, true, OB_DEFAULT_COLUMN_SRS_ID);

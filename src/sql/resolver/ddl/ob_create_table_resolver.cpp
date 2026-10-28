@@ -306,6 +306,8 @@ int ObCreateTableResolver::resolve(const ParseNode &parse_tree)
             }
           }
           if (OB_SUCC(ret)) {
+            if (OB_FAIL(finalize_ai_columns(create_table_stmt->get_create_table_arg().schema_))) {
+            }
             reset();
             // When the user creates a table without specifying a primary key, it is internally implemented as a new table without a primary key, TableOrganizationFormat specified by the user is currently not supported
             if (0 == get_primary_key_size() || is_organization_set_to_heap()) {

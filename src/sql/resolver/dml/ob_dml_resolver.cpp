@@ -1883,6 +1883,21 @@ int ObDMLResolver::resolve_basic_column_item(const TableItem &table_item,
     if (OB_FAIL(ret)) {
       //do nothing
     } else if (OB_FAIL(schema_checker_->get_table_schema( tid, table_schema))) {
+    } else if ((session_info_->ai_column_internal_read() || session_info_->ai_column_retry_id() != OB_INVALID_ID)
+        && table_schema->has_ai_column()) {
+      const auto *candidate = table_schema->get_column_schema(column_name);
+      if (candidate != nullptr && candidate->is_hidden()) {
+        for (auto it = table_schema->column_begin(); !include_hidden && it != table_schema->column_end(); ++it) {
+          if ((*it)->is_ai_column()) {
+            const auto &definition = (*it)->get_ai_column_schema();
+            const uint64_t id = candidate->get_column_id();
+            include_hidden = id == definition.get_state_column_id() || id == definition.get_request_column_id()
+                || id == definition.get_result_spec_column_id() || id == definition.get_incarnation_column_id();
+          }
+        }
+      }
+    }
+    if (OB_FAIL(ret)) {
     } else if (OB_FAIL(get_column_schema(tid, column_name, col_schema, include_hidden))) {
     } else if (OB_ISNULL(col_schema)) {
       ret = OB_ERR_UNEXPECTED;
@@ -2194,6 +2209,10 @@ int ObDMLResolver::resolve_qualified_identifier(ObQualifiedName &q_name,
 
   for (int64_t i = 0; OB_SUCC(ret) && i < columns.count(); ++i) {
     OZ (columns.at(i).replace_access_ident_params(q_name.ref_expr_, real_ref_expr));
+  }
+
+  if (OB_SUCC(ret) && OB_NOT_NULL(real_ref_expr)) {
+    ret = record_ai_column_read_reference(real_ref_expr);
   }
 
   return ret;
@@ -5673,6 +5692,82 @@ int ObDMLResolver::resolve_partitions(const ParseNode *part_node,
         }
       }
     }
+  }
+  return ret;
+}
+
+int ObDMLResolver::record_ai_column_read_reference(ObRawExpr *expression)
+{
+  int ret = OB_SUCCESS;
+  auto *statement = get_stmt();
+  if (expression == nullptr || statement == nullptr || statement->get_query_ctx() == nullptr) {
+    return OB_SUCCESS;
+  }
+  if (expression->is_column_ref_expr()) {
+    auto *column = static_cast<ObColumnRefRawExpr *>(expression);
+    const auto *table = statement->get_table_item_by_id(column->get_table_id());
+    const auto *item = statement->get_column_item_by_id(column->get_table_id(), column->get_column_id());
+    if (table != nullptr && item != nullptr
+        && (table->is_basic_table() || item->base_tid_ != OB_INVALID_ID)) {
+      const uint64_t tid = item->base_tid_ != OB_INVALID_ID ? item->base_tid_ : table->ref_id_;
+      const uint64_t cid = item->base_cid_ != OB_INVALID_ID ? item->base_cid_ : column->get_column_id();
+      const ObColumnSchemaV2 *schema = nullptr;
+      if (OB_FAIL(schema_checker_->get_column_schema(tid, cid, schema, true))) {
+      } else if (schema != nullptr && schema->is_ai_column()) {
+        auto &refs = statement->get_query_ctx()->ai_column_read_refs_;
+        bool found = false;
+        for (int64_t i = 0; i + 1 < refs.count(); i += 2) {
+          found |= refs.at(i) == tid && refs.at(i + 1) == cid;
+        }
+        if (!found && OB_FAIL(refs.push_back(tid))) {
+        } else if (!found) { ret = refs.push_back(cid); }
+      }
+    }
+  }
+  for (int64_t i = 0; OB_SUCC(ret) && i < expression->get_param_count(); ++i) {
+    ret = SMART_CALL(record_ai_column_read_reference(expression->get_param_expr(i)));
+  }
+  return ret;
+}
+
+int ObDMLResolver::is_ai_result_column(const ObColumnRefRawExpr *column,
+                                     const ObDMLStmt *statement, bool &is_ai)
+{
+  int ret = OB_SUCCESS;
+  is_ai = false;
+  const TableItem *table = nullptr;
+  const ColumnItem *item = nullptr;
+  const ObColumnSchemaV2 *schema = nullptr;
+  if (column == nullptr || statement == nullptr || schema_checker_ == nullptr
+      || (table = statement->get_table_item_by_id(column->get_table_id())) == nullptr
+      || (item = statement->get_column_item_by_id(column->get_table_id(), column->get_column_id())) == nullptr) {
+    ret = OB_ERR_UNEXPECTED;
+  } else {
+    const uint64_t tid = item->base_tid_ != OB_INVALID_ID
+        ? item->base_tid_ : table->get_base_table_item().ref_id_;
+    const uint64_t cid = item->base_cid_ != OB_INVALID_ID ? item->base_cid_ : column->get_column_id();
+    if (OB_FAIL(schema_checker_->get_column_schema(tid, cid, schema, true))) {
+    } else if (schema == nullptr) {
+      ret = OB_ERR_UNEXPECTED;
+    } else {
+      is_ai = schema->is_ai_column();
+    }
+  }
+  return ret;
+}
+
+int ObDMLResolver::check_ai_column_assignment(const ObColumnRefRawExpr *column,
+                                            const ObDMLStmt *statement)
+{
+  int ret = OB_SUCCESS;
+  if (session_info_ != nullptr && session_info_->is_inner() && session_info_->ai_column_internal_write()) {
+    return ret;
+  }
+  bool is_ai = false;
+  if (OB_FAIL(is_ai_result_column(column, statement, is_ai))) {
+  } else if (is_ai) {
+    ret = OB_NOT_SUPPORTED;
+    LOG_USER_ERROR(OB_NOT_SUPPORTED, "direct assignment to an AI COLUMN is");
   }
   return ret;
 }

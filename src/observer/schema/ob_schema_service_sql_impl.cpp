@@ -1302,6 +1302,23 @@ int ObSchemaServiceSQLImpl::get_sys_variable_schema(
       ObSysVarClassType sys_var_id = ObSysVariables::get_sys_var_id(i);
       const ObSysVarSchema *sys_var = NULL;
       if (OB_FAIL(sys_variable_schema.get_sysvar_schema(sys_var_id, sys_var))) {
+        if (ret == OB_ERR_SYS_VARIABLE_UNKNOWN) {
+          // A saved directory predating a newly registered variable has no
+          // history row for it. Complete its schema from the registered default
+          // rather than preventing the server from opening existing data.
+          ret = OB_SUCCESS;
+          ObSysVarSchema missing;
+          missing.set_data_type(ObSysVariables::get_type(i));
+          missing.set_flags(ObSysVariables::get_flags(i));
+          missing.set_schema_version(fetch_version);
+          if (OB_FAIL(missing.set_name(ObSysVariables::get_name(i)))
+              || OB_FAIL(missing.set_value(ObSysVariables::get_value(i)))
+              || OB_FAIL(missing.set_min_val(ObSysVariables::get_min(i)))
+              || OB_FAIL(missing.set_max_val(ObSysVariables::get_max(i)))
+              || OB_FAIL(missing.set_info(ObSysVariables::get_info(i)))
+              || OB_FAIL(sys_variable_schema.add_sysvar_schema(missing))) {
+          }
+        }
       } else if (OB_ISNULL(sys_var)) {
         ret = OB_ERR_UNEXPECTED;
       } else {
