@@ -69,8 +69,7 @@ public:
 
 #define FT_PARSER_TYPE(fts_type, parser_name)                          \
   OB_INLINE bool is_##parser_name() const {                            \
-    ParserType type = fts_type;                                        \
-    return ObFTParserName(NAME_STR[type]) == parser_name_;             \
+    return 0 == STRCMP(#parser_name, parser_name_.str());               \
   }
   FTS_BUILD_IN_PARSER_LIST
 #undef FT_PARSER_TYPE
@@ -161,6 +160,11 @@ public:
       common::ObIAllocator *allocator,
       const common::ObString &parser_name,
       const common::ObString &parser_properties);
+  // The typed properties must have been read from validated/rebuilt parser properties.
+  int init(
+      common::ObIAllocator *allocator,
+      const common::ObString &parser_name,
+      const ObFTParserProperty &parser_properties);
   /**
    * Split document into multiple words
    *
@@ -202,6 +206,11 @@ public:
       const ObFTWordMap &words,
       common::ObIJsonBase *&json_root);
 
+  // Serialize DEFAULT output directly, preserving the token map's iteration order.
+  int make_token_array_json_bin(
+      const ObFTWordMap &words,
+      common::ObIJsonBase *&json_root);
+
   void reset();
 
   TO_STRING_KV(KP_(allocator), K_(parser_name), KP_(parser_desc), K_(is_inited));
@@ -217,6 +226,7 @@ private:
       common::ObIAllocator &allocator,
       ObAddWord &add_word);
   int set_add_word_flag(const ObIFTParserDesc &ftparser_desc);
+  int finish_init(common::ObIAllocator *allocator, int ret);
 private:
   common::ObIAllocator *allocator_;
   const ObIFTParserDesc *parser_desc_;

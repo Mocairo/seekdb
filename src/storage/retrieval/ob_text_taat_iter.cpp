@@ -32,12 +32,19 @@ int ObTextTaaTIter::init(const ObTextTaaTParam &param)
     ret = OB_INVALID_ARGUMENT;
   } else if (OB_FAIL(CURRENT_CONTEXT->CREATE_CONTEXT(mem_context_, mem_param))) {
   } else if (OB_FAIL(ObSRTaaTIterImpl::init(*param.base_param_, *param.dim_iter_, *param.allocator_))) {
-  } else if (param.base_param_->need_calc_relevance()
+  } else if (OB_NOT_NULL(param.base_param_->relevance_expr_)
              && OB_FAIL(bm25_param_estimator_.init(param.bm25_param_est_ctx_))) {
   } else {
     query_tokens_ = param.query_tokens_;
     mode_flag_ = param.mode_flag_;
     function_lookup_mode_ = param.function_lookup_mode_;
+    if (OB_ISNULL(param.base_param_->relevance_expr_)) {
+      const int64_t doc_cnt = param.bm25_param_est_ctx_.estimated_total_doc_cnt_;
+      // Row stores spill, but each partition's final hash map stays in memory.
+      // Without statistics, retain the maximum partitioning of large tables.
+      partition_cnt_ = doc_cnt <= 0 ? OB_MAX_HASHMAP_COUNT
+          : MIN((doc_cnt - 1) / OB_HASHMAP_DEFAULT_SIZE + 1, OB_MAX_HASHMAP_COUNT);
+    }
   }
   return ret;
 }
@@ -64,9 +71,7 @@ void ObTextTaaTIter::reuse(const bool switch_tablet)
 int ObTextTaaTIter::pre_process()
 {
   int ret = OB_SUCCESS;
-  if (query_tokens_->empty()) {
-    ret = OB_ITER_END;
-  } else if (iter_param_->need_calc_relevance()) {
+  if (OB_NOT_NULL(iter_param_->relevance_expr_)) {
     const bool is_first_estimation = !bm25_param_estimator_.is_estimated();
     if (!is_first_estimation) {
       // skip
@@ -75,11 +80,6 @@ int ObTextTaaTIter::pre_process()
       const int64_t total_doc_cnt = bm25_param_estimator_.get_total_doc_cnt();
       partition_cnt_ = MIN((total_doc_cnt-1) / OB_HASHMAP_DEFAULT_SIZE + 1, OB_MAX_HASHMAP_COUNT);
     }
-  } else if (partition_cnt_ == 0) {
-    // Without BM25 estimation the document count is unknown. Use the existing
-    // partition limit to avoid putting a large result set into one hash map.
-    // This preserves partition-at-a-time deduplication without doc-agg scans.
-    partition_cnt_ = OB_MAX_HASHMAP_COUNT;
   }
   return ret;
 }

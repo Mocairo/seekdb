@@ -103,6 +103,8 @@ int ObITextAnalyzer::add_normalizer(
     }
     case ObTokenNormalizer::ENG_BASIC_NORM: {
       if (OB_FAIL(add_token_stream<ObBasicEnglishNormalizer>(token_stream))) {
+      } else {
+        static_cast<ObBasicEnglishNormalizer *>(token_stream)->set_token_allocator(ctx.token_allocator_);
       }
       break;
     }

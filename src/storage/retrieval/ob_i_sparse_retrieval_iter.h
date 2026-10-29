@@ -76,6 +76,22 @@ public:
   // interface for daat processing
   virtual int get_curr_score(double &score) const = 0;
   virtual int get_curr_id(const ObDatum *&datum) const = 0;
+  // Optional membership-only interface. Spans form an ascending sequence
+  // under the domain-ID comparator, as required by the DaaT merge. Borrowed
+  // IDs remain valid until this source is fetched again, reused or reset.
+  // Do not mix with row reads.
+  virtual int get_next_doc_id_batch(const ObDocIdExt *&ids, int64_t &count)
+  {
+    ids = nullptr;
+    count = 0;
+    return OB_NOT_SUPPORTED;
+  }
+  // Optional proof for the current owned ID span: every datum has pack_ == 16
+  // (non-NULL, no special flags, sixteen readable bytes) and its ptr_ points
+  // to that ObDocIdExt object's own inline buffer. Shape alone is insufficient.
+  // Producers must clear it before a load, on failure, reuse and reset, and
+  // publish it only after copying the complete span. Other producers retain false.
+  virtual bool is_fixed16_doc_id_batch() const { return false; }
   // interface for plain dynamic pruning algorithms such as WAND and MaxScore
   virtual int get_dim_max_score(double &score)
   {
@@ -116,7 +132,6 @@ struct ObSparseRetrievalMergeParam
   {}
   ~ObSparseRetrievalMergeParam() {}
   bool need_project_relevance() const { return relevance_proj_expr_ != nullptr; }
-  bool need_calc_relevance() const { return relevance_expr_ != nullptr; }
   bool need_filter() const { return filter_expr_ != nullptr; }
   bool need_pushdown_topk() const { return topk_limit_ > 0; }
   TO_STRING_KV(KPC_(dim_weights), KPC(limit_param_), KP_(eval_ctx),

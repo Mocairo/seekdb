@@ -1,0 +1,117 @@
+drop database if exists fts_match_membership;
+create database fts_match_membership;
+use fts_match_membership;
+create table docs (
+id bigint primary key,
+category int,
+body text,
+fulltext index ft(body) with parser beng
+) charset utf8mb4;
+insert into docs values
+(1, 1, 'alpha alpha beta token000 token299'),
+(2, 2, 'beta gamma token001'),
+(3, 1, 'alpha gamma token299'),
+(4, 2, 'delta'), (5, 1, ''), (6, 1, NULL),
+(7, 1, 'the and or');
+select id from docs where match(body) against('alpha beta') order by id;
+id
+1
+2
+3
+select id from docs where match(body) against('alpha alpha beta absent') order by id;
+id
+1
+2
+3
+select id from docs where match(body) against('alpha beta') and category = 1 order by id;
+id
+1
+3
+select id from docs where match(body) against('alpha beta') order by id limit 1 offset 1;
+id
+2
+select count(*) from (select id from docs where match(body) against('alpha beta') limit 2) t;
+count(*)
+2
+select id from docs where match(body) against('absent') order by id;
+id
+select id from docs where match(body) against('') order by id;
+id
+select id from docs where match(body) against(NULL) order by id;
+id
+select id from docs where match(body) against('the and or') order by id;
+id
+7
+select id, round(match(body) against('alpha beta'), 8) score
+from docs where match(body) against('alpha beta') order by id;
+id	score
+1	2.25273532
+2	1.10484471
+3	1.10484471
+select id from docs where match(body) against('alpha beta')
+order by match(body) against('alpha beta') desc, id;
+id
+1
+2
+3
+select round(sum(match(body) against('alpha beta')), 8) total_score
+from docs where match(body) against('alpha beta');
+total_score
+4.46242473
+select id, round(score, 8) score from
+(select /*+ no_merge */ id, match(body) against('alpha beta') score
+from docs where match(body) against('alpha beta')) t
+where score > 0 order by id;
+id	score
+1	2.25273532
+2	1.10484471
+3	1.10484471
+prepare threshold_sql from 'select id from docs where match(body) against (?) and match(body) against (?) > ? order by id';
+set @query = 'alpha beta', @threshold = 0;
+execute threshold_sql using @query, @query, @threshold;
+id
+1
+2
+3
+set @threshold = 10;
+execute threshold_sql using @query, @query, @threshold;
+id
+deallocate prepare threshold_sql;
+select id from docs where match(body) against('+alpha +beta' in boolean mode) order by id;
+id
+1
+select id from docs where match(body) against('+alpha -beta' in boolean mode) order by id;
+id
+3
+select id, round(match(body) against('+alpha -beta' in boolean mode), 8) score
+from docs where match(body) against('+alpha -beta' in boolean mode) order by id;
+id	score
+3	1.10484471
+set session group_concat_max_len = 65536;
+create table digits (n int primary key);
+insert into digits values (0),(1),(2),(3),(4),(5),(6),(7),(8),(9);
+select group_concat(concat('token', lpad(a.n * 100 + b.n * 10 + c.n, 3, '0'))
+order by a.n, b.n, c.n separator ' ')
+into @many_tokens from digits a, digits b, digits c where a.n < 3;
+prepare membership_sql from 'select id from docs where match(body) against (?) order by id';
+set @query = 'alpha beta';
+execute membership_sql using @query;
+id
+1
+2
+3
+execute membership_sql using @many_tokens;
+id
+1
+2
+3
+set @query = 'absent';
+execute membership_sql using @query;
+id
+execute membership_sql using @many_tokens;
+id
+1
+2
+3
+deallocate prepare membership_sql;
+drop database fts_match_membership;

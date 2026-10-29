@@ -22,6 +22,7 @@
 #include "lib/alloc/alloc_struct.h"
 #include "lib/allocator/ob_allocator.h"
 #include "lib/allocator/page_arena.h"
+#include "lib/hash_func/murmur_hash.h"
 #include "lib/list/ob_list.h"
 #include "lib/oblog/ob_log_module.h"
 #include "lib/utility/ob_macro_utils.h"
@@ -299,8 +300,40 @@ template class ObFTDATReader<void>;
 
 ObArrayHashMap *ObFTDAT::get_map() { return reinterpret_cast<ObArrayHashMap *>(buff); }
 
+namespace
+{
+inline int find_three_byte_word(const ObArrayHashMap::Header &header,
+                                const ObFTSingleWord &word,
+                                ObFTWordCode &code)
+{
+  int ret = OB_ENTRY_NOT_EXIST;
+  // Use the original hash and probe sequence. A constant character length
+  // lets the compiler unroll the Murmur tail and the bounded comparison.
+  const uint64_t hash = common::murmurhash(word.word, 3, 0);
+  uint64_t index = hash % header.capacity_;
+  while (header.data[index].used) {
+    const ObFTSingleWord &entry_word = header.data[index].word;
+    if (&entry_word == &word
+        || (3 == entry_word.word_len && 0 == MEMCMP(entry_word.word, word.word, 3))) {
+      code = header.data[index].code;
+      ret = OB_SUCCESS;
+      break;
+    } else {
+      index += 3;
+      if (index >= header.capacity_) {
+        index -= header.capacity_;
+      }
+    }
+  }
+  return ret;
+}
+} // namespace
+
 int ObArrayHashMap::find(const ObFTSingleWord &word, ObFTWordCode &code) const
 {
+  if (3 == word.word_len) {
+    return find_three_byte_word(header_, word, code);
+  }
   int ret = OB_ENTRY_NOT_EXIST;
   uint64_t hash = word.get_word().hash();
   uint64_t index = hash % header_.capacity_;
@@ -310,7 +343,12 @@ int ObArrayHashMap::find(const ObFTSingleWord &word, ObFTWordCode &code) const
       ret = OB_SUCCESS;
       break;
     } else {
-      index = (index + 3) % header_.capacity_;
+      // The initialized capacity is at least 101, so advancing from an
+      // in-range slot by three needs at most one wrap.
+      index += 3;
+      if (index >= header_.capacity_) {
+        index -= header_.capacity_;
+      }
     }
   }
   return ret;
@@ -322,7 +360,10 @@ int ObArrayHashMap::insert(const ObString &key, ObFTWordCode code)
   uint64_t hash = key.hash();
   uint64_t index = hash % header_.capacity_;
   while (header_.data[index].used) {
-    index = (index + 3) % header_.capacity_;
+    index += 3;
+    if (index >= header_.capacity_) {
+      index -= header_.capacity_;
+    }
   }
 
   header_.data[index].code = code;

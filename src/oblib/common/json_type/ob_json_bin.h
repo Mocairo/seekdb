@@ -876,6 +876,7 @@ public:
   bool use_lexicographical_order() const { return OB_ISNULL(ctx_) ? false : ctx_->use_lexicographical_order_; }
 
 private:
+  int print_array(ObJsonBuffer &j_buf, uint64_t depth, bool is_pretty) const override;
   // used as stack
   struct ObJBNodeMeta {
     uint8_t ver_type_;   // version type, the value is ObJBVerType::members

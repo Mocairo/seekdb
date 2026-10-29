@@ -15,6 +15,9 @@
  */
 
 #include "lib/checksum/ob_crc64.h"
+#if (defined(__GNUC__) && defined(__x86_64__)) || (defined(_WIN32) && defined(_M_X64))
+#include <nmmintrin.h>
+#endif
 
 namespace oceanbase
 {
@@ -338,35 +341,13 @@ uint64_t ob_crc64(const void *pv, int64_t cb)
  * this code copy from:
  * http://bazaar.launchpad.net/~mysql/mysql-server/5.6/view/head:/storage/innobase/ut/ut0crc32.cc
  */
-#if defined(__GNUC__) && defined(__x86_64__)
-/* opcodes taken from objdump of "crc32b (%%rdx), %%rcx"
-for RHEL4 support (GCC 3 doesn't support this instruction) */
-#define crc32_sse42_byte \
-  asm(".byte 0xf2, 0x48, 0x0f, 0x38, 0xf0, 0x0a" \
-      : "=c"(crc) : "c"(crc), "d"(buf)); \
-  len--, buf++
-
-/* opcodes taken from objdump of "crc32q (%%rdx), %%rcx"
-for RHEL4 support (GCC 3 doesn't support this instruction) */
-#define crc32_sse42_quadword \
-  asm(".byte 0xf2, 0x48, 0x0f, 0x38, 0xf1, 0x0a" \
-      : "=c"(crc) : "c"(crc), "d"(buf)); \
-  len -= 8, buf += 8
-#elif defined(__aarch64__)
+#if defined(__aarch64__)
 #include "arm_acle.h"
 #define crc32_sse42_quadword crc = __crc32cd(crc, *(int64_t*)buf); len -= 8, buf += 8
 #define crc32_sse42_byte crc = __crc32cb(crc, (uint8_t)*buf); len--, buf++
-#elif defined(_WIN32) && defined(_M_X64)
-#include <nmmintrin.h>
-#define crc32_sse42_byte \
-  crc = _mm_crc32_u8((uint32_t)crc, (uint8_t)*buf); \
-  len--, buf++
-#define crc32_sse42_quadword \
-  crc = _mm_crc32_u64(crc, *(uint64_t*)buf); \
-  len -= 8, buf += 8
-#endif /* defined(__GNUC__) && defined(__x86_64__) */
+#endif
 
-#if defined(_WIN32) && defined(_M_X64)
+#if (defined(__GNUC__) && defined(__x86_64__)) || (defined(_WIN32) && defined(_M_X64))
 __attribute__((target("sse4.2")))
 #endif
 uint64_t crc64_sse42(uint64_t uCRC64, const char* buf, int64_t len)
@@ -374,6 +355,45 @@ uint64_t crc64_sse42(uint64_t uCRC64, const char* buf, int64_t len)
   uint64_t crc = uCRC64;
 
   if (NULL != buf && len > 0) {
+#if (defined(__GNUC__) && defined(__x86_64__)) || (defined(_WIN32) && defined(_M_X64))
+    // CRC32 accepts unaligned operands. Copy only complete input words so
+    // short token/datums need neither an alignment prologue nor readable
+    // padding beyond their final byte. memcpy also avoids alignment/aliasing UB.
+    while (len >= 32) {
+      uint64_t words[4];
+      MEMCPY(words, buf, sizeof(words));
+      crc = _mm_crc32_u64(crc, words[0]);
+      crc = _mm_crc32_u64(crc, words[1]);
+      crc = _mm_crc32_u64(crc, words[2]);
+      crc = _mm_crc32_u64(crc, words[3]);
+      len -= sizeof(words);
+      buf += sizeof(words);
+    }
+    while (len >= 8) {
+      uint64_t word;
+      MEMCPY(&word, buf, sizeof(word));
+      crc = _mm_crc32_u64(crc, word);
+      len -= sizeof(word);
+      buf += sizeof(word);
+    }
+    if (len >= 4) {
+      uint32_t word;
+      MEMCPY(&word, buf, sizeof(word));
+      crc = _mm_crc32_u32(static_cast<uint32_t>(crc), word);
+      len -= sizeof(word);
+      buf += sizeof(word);
+    }
+    if (len >= 2) {
+      uint16_t word;
+      MEMCPY(&word, buf, sizeof(word));
+      crc = _mm_crc32_u16(static_cast<uint32_t>(crc), word);
+      len -= sizeof(word);
+      buf += sizeof(word);
+    }
+    if (len > 0) {
+      crc = _mm_crc32_u8(static_cast<uint32_t>(crc), static_cast<uint8_t>(*buf));
+    }
+#else
     while (len && ((uint64_t) buf & 7)) {
       crc32_sse42_byte;
     }
@@ -392,6 +412,7 @@ uint64_t crc64_sse42(uint64_t uCRC64, const char* buf, int64_t len)
     while (len) {
       crc32_sse42_byte;
     }
+#endif
   }
 
   return crc;

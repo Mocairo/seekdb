@@ -445,10 +445,11 @@ template <ObCharsetType CS_TYPE>
 inline int ObFTCharUtil::do_classify(const char *input, const uint8_t char_len, CharType &type)
 {
   int ret = OB_SUCCESS;
-  bool checker = false;
   ob_wc_t unicode = 0;
   type = CharType::USELESS;
 
+  // Decode once, keeping the category precedence (fullwidth letters and
+  // digits also belong to the OTHER_CJK block).
   if (OB_FAIL(decode_unicode<CS_TYPE>(input, char_len, unicode))) {
   } else if (ObUnicodeBlockUtils::is_alpha(unicode)) {
     type = CharType::ENGLISH_LETTER;
@@ -458,11 +459,11 @@ inline int ObFTCharUtil::do_classify(const char *input, const uint8_t char_len, 
     type = CharType::CHINESE;
   } else if (ObUnicodeBlockUtils::is_other_cjk(unicode)) {
     type = CharType::OTHER_CJK;
-  } else if (OB_FAIL(is_surrogate_high<CS_TYPE>(input, char_len, checker))) {
-  } else if (checker) {
+  } else if ((CS_TYPE == CHARSET_UTF16 || CS_TYPE == CHARSET_UTF16LE)
+             && ObUnicodeBlockUtils::check_high_surrogate(unicode)) {
     type = CharType::SURROGATE_HIGH;
-  } else if (OB_FAIL(is_surrogate_low<CS_TYPE>(input, char_len, checker))) {
-  } else if (checker) {
+  } else if ((CS_TYPE == CHARSET_UTF16 || CS_TYPE == CHARSET_UTF16LE)
+             && ObUnicodeBlockUtils::check_low_surrogate(unicode)) {
     type = CharType::SURROGATE_LOW;
   }
   return ret;

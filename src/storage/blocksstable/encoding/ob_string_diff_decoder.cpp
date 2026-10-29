@@ -19,6 +19,12 @@
 #include "ob_string_diff_decoder.h"
 
 #include "ob_raw_decoder.h"
+#include "lib/utility/ob_target_specific.h"
+
+#if defined(__GNUC__) && defined(__x86_64__)
+#include <cpuid.h>
+#include <tmmintrin.h>
+#endif
 
 namespace oceanbase
 {
@@ -26,6 +32,98 @@ namespace blocksstable
 {
 using namespace common;
 const ObColumnHeader::Type ObStringDiffDecoder::type_;
+
+namespace
+{
+#if defined(__GNUC__) && defined(__x86_64__)
+bool short_string_diff_simd_supported()
+{
+  // Keep the engine's CPU/OS feature gate, and check SSSE3 itself: its CPUID
+  // feature bit is independent of the SSE4.2 bit used by ObTargetArch.
+  static const bool has_ssse3 = []() {
+    unsigned int eax = 0;
+    unsigned int ebx = 0;
+    unsigned int ecx = 0;
+    unsigned int edx = 0;
+    return __get_cpuid(1, &eax, &ebx, &ecx, &edx) && (ecx & bit_SSSE3) != 0;
+  }();
+  return is_arch_supported(ObTargetArch::SSE42) && has_ssse3;
+}
+
+template <int64_t PACKED_LENGTH>
+__attribute__((target("ssse3")))
+void decode_short_string_diff_rows(
+    const char *col_data,
+    const int32_t *row_ids,
+    const int64_t row_cap,
+    const uint16_t string_size,
+    const unsigned char *common_bytes,
+    const unsigned char *shuffle_bytes,
+    char *buf,
+    ObDatum *datums)
+{
+  const __m128i common = _mm_loadu_si128(reinterpret_cast<const __m128i *>(common_bytes));
+  const __m128i shuffle = _mm_loadu_si128(reinterpret_cast<const __m128i *>(shuffle_bytes));
+  for (int64_t i = 0; i < row_cap; ++i) {
+    // The constant-size copy reads exactly this row's packed payload, including
+    // the last physical row. A full-width source load could cross the block.
+    __m128i packed = _mm_setzero_si128();
+    MEMCPY(&packed, col_data + row_ids[i] * PACKED_LENGTH, PACKED_LENGTH);
+    char *str_ptr = buf + i * 16;
+    _mm_storeu_si128(reinterpret_cast<__m128i *>(str_ptr),
+        _mm_or_si128(_mm_shuffle_epi8(packed, shuffle), common));
+    datums[i].pack_ = string_size;
+    datums[i].ptr_ = str_ptr;
+  }
+}
+
+int decode_short_string_diff(
+    const ObColumnDecoderCtx &ctx,
+    const ObStringDiffHeader &header,
+    const int32_t *row_ids,
+    const int64_t row_cap,
+    ObDatum *datums)
+{
+  int ret = OB_SUCCESS;
+  char *buf = static_cast<char *>(ctx.allocator_->alloc(16 * row_cap));
+  if (OB_ISNULL(buf)) {
+    ret = OB_ALLOCATE_MEMORY_FAILED;
+  } else {
+    unsigned char common_bytes[16] = {};
+    unsigned char shuffle_bytes[16];
+    MEMSET(shuffle_bytes, 0x80, sizeof(shuffle_bytes));
+    header.copy_string(ObStringDiffHeader::LeftToRight(), std::logical_not<uint8_t>(),
+        header.common_data(), common_bytes);
+    int64_t full_pos = 0;
+    int64_t packed_pos = 0;
+    for (int64_t i = 0; i < header.diff_desc_cnt_; ++i) {
+      const ObStringDiffHeader::DiffDesc &desc = header.diff_descs_[i];
+      if (desc.diff_) {
+        for (int64_t j = 0; j < desc.count_; ++j) {
+          shuffle_bytes[full_pos + j] = static_cast<unsigned char>(packed_pos++);
+        }
+      }
+      full_pos += desc.count_;
+    }
+    using DecodeFunc = void (*)(const char *, const int32_t *, const int64_t,
+        const uint16_t, const unsigned char *, const unsigned char *, char *, ObDatum *);
+    static const DecodeFunc decode_funcs[] = {
+        decode_short_string_diff_rows<1>, decode_short_string_diff_rows<2>,
+        decode_short_string_diff_rows<3>, decode_short_string_diff_rows<4>,
+        decode_short_string_diff_rows<5>, decode_short_string_diff_rows<6>,
+        decode_short_string_diff_rows<7>, decode_short_string_diff_rows<8>,
+        decode_short_string_diff_rows<9>, decode_short_string_diff_rows<10>,
+        decode_short_string_diff_rows<11>, decode_short_string_diff_rows<12>,
+        decode_short_string_diff_rows<13>, decode_short_string_diff_rows<14>,
+        decode_short_string_diff_rows<15>, decode_short_string_diff_rows<16>};
+    const char *col_data = reinterpret_cast<const char *>(&header) + ctx.col_header_->length_;
+    decode_funcs[header.length_ - 1](col_data, row_ids, row_cap, header.string_size_,
+        common_bytes, shuffle_bytes, buf, datums);
+  }
+  return ret;
+}
+#endif
+} // namespace
 
 ObStringDiffDecoder::ObStringDiffDecoder() : header_(NULL)
 {
@@ -141,6 +239,13 @@ int ObStringDiffDecoder::batch_decode(
   int ret = OB_SUCCESS;
   if (OB_UNLIKELY(!is_inited())) {
     ret = OB_NOT_INIT;
+#if defined(__GNUC__) && defined(__x86_64__)
+  } else if (ctx.is_fix_length() && !ctx.has_extend_value()
+      && !header_->is_hex_packing() && header_->string_size_ > 0
+      && header_->string_size_ <= 16 && header_->length_ > 0
+      && header_->length_ <= header_->string_size_ && short_string_diff_simd_supported()) {
+    ret = decode_short_string_diff(ctx, *header_, row_ids, row_cap, datums);
+#endif
   } else {
     const unsigned char *col_data = reinterpret_cast<const unsigned char *>(header_)
         + ctx.col_header_->length_;

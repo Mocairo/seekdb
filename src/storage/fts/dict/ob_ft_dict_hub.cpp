@@ -28,12 +28,33 @@ namespace oceanbase
 {
 namespace storage
 {
+class ObFTDictHub::BuiltinDictView
+{
+public:
+  explicit BuiltinDictView(const ObFTDictDesc &desc)
+      : allocator_(lib::ObMemAttr("FTDictView")), container_(allocator_),
+        dict_(allocator_, &container_, desc)
+  {}
+
+  ObArenaAllocator allocator_;
+  ObFTCacheRangeContainer container_;
+  ObFTRangeDict dict_;
+};
+
+ObFTDictHub::ObFTDictHub()
+    : is_inited_(false), dict_map_(), rw_dict_lock_(), builtin_dict_lock_(),
+      builtin_dicts_{nullptr, nullptr, nullptr}
+{}
+
 int ObFTDictHub::init()
 {
   static constexpr int K_MAX_DICT_BUCKET = 128; // for now, only built-in dicts.
   int ret = OB_SUCCESS;
-  if (OB_FAIL(dict_map_.create(K_MAX_DICT_BUCKET, "dict_map"))) {
+  if (is_inited_) {
+    ret = OB_INIT_TWICE;
+  } else if (OB_FAIL(dict_map_.create(K_MAX_DICT_BUCKET, "dict_map"))) {
   } else if (OB_FAIL(rw_dict_lock_.init(K_MAX_DICT_BUCKET))) {
+    dict_map_.destroy();
   } else {
     is_inited_ = true;
   }
@@ -43,7 +64,63 @@ int ObFTDictHub::init()
 int ObFTDictHub::destroy()
 {
   int ret = OB_SUCCESS;
+  // All parsers must stop before the hub, and cache handles must be released
+  // before ObDictCache / ObKVGlobalCache are destroyed.
+  lib::ObMutexGuard guard(builtin_dict_lock_);
+  for (int64_t i = 0; i < BUILTIN_DICT_COUNT; ++i) {
+    BuiltinDictView *view = builtin_dicts_[i].exchange(nullptr, std::memory_order_acq_rel);
+    if (nullptr != view) {
+      view->~BuiltinDictView();
+      ob_free(view);
+    }
+  }
+  dict_map_.destroy();
+  rw_dict_lock_.destroy();
   is_inited_ = false;
+  return ret;
+}
+
+int ObFTDictHub::get_builtin_dict(const ObFTDictType type, const ObIFTDict *&dict)
+{
+  int ret = OB_SUCCESS;
+  dict = nullptr;
+  const int64_t index = static_cast<int64_t>(type) - 1;
+  if (!is_inited_) {
+    ret = OB_NOT_INIT;
+  } else if (index < 0 || index >= BUILTIN_DICT_COUNT) {
+    ret = OB_INVALID_ARGUMENT;
+  } else {
+    BuiltinDictView *view = builtin_dicts_[index].load(std::memory_order_acquire);
+    if (nullptr == view) {
+      lib::ObMutexGuard guard(builtin_dict_lock_);
+      view = builtin_dicts_[index].load(std::memory_order_relaxed);
+      if (nullptr == view) {
+        static const char *names[BUILTIN_DICT_COUNT] = {"main_dict", "quan_dict", "stopword"};
+        const ObFTDictDesc desc(names[index], type, CHARSET_UTF8MB4, CS_TYPE_UTF8MB4_BIN);
+        void *buf = ob_malloc(sizeof(BuiltinDictView), lib::ObMemAttr("FTDictView"));
+        if (OB_ISNULL(buf)) {
+          ret = OB_ALLOCATE_MEMORY_FAILED;
+        } else {
+          view = new (buf) BuiltinDictView(desc);
+          if (OB_FAIL(load_cache(desc, view->container_)) && OB_ENTRY_NOT_EXIST == ret) {
+            ret = build_cache(desc, view->container_);
+          }
+          if (OB_SUCC(ret) && OB_FAIL(view->dict_.init())) {
+          }
+          if (OB_SUCC(ret)) {
+            builtin_dicts_[index].store(view, std::memory_order_release);
+          } else {
+            view->~BuiltinDictView();
+            ob_free(view);
+            view = nullptr;
+          }
+        }
+      }
+    }
+    if (OB_SUCC(ret)) {
+      dict = &view->dict_;
+    }
+  }
   return ret;
 }
 int ObFTDictHub::build_cache(const ObFTDictDesc &desc, ObFTCacheRangeContainer &container)

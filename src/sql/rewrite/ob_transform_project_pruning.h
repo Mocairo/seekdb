@@ -37,6 +37,8 @@ public:
   virtual int transform_one_stmt_with_outline(common::ObIArray<ObParentDMLStmt> &parent_stmts,
                                               ObDMLStmt *&stmt,
                                               bool &trans_happened) override;
+
+  int check_hint_allowed_prune(ObSelectStmt &ref_query, bool &allowed);
 private:
   int transform_table_items(ObDMLStmt *&stmt,
                             bool with_outline,
@@ -54,7 +56,6 @@ private:
  
   int check_transform_validity(const ObSelectStmt &stmt, bool &is_valid); 
  
-  int check_hint_allowed_prune(ObSelectStmt &ref_query, bool &allowed);
 private:
   DISALLOW_COPY_AND_ASSIGN(ObTransformProjectPruning);
 };

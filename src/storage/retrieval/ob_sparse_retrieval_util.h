@@ -25,6 +25,43 @@ namespace oceanbase
 namespace storage
 {
 
+inline int compare_binary_domain_ids(
+    const ObDatum &lhs, const ObDatum &rhs, int &cmp_ret,
+    const common::ObDatumAccessContext *access_ctx)
+{
+  int ret = OB_SUCCESS;
+  if (OB_UNLIKELY(lhs.is_null() || rhs.is_null() || lhs.is_ext() || rhs.is_ext())) {
+    ret = ObDatumFuncs::get_basic_func(common::ObVarcharType, common::CS_TYPE_BINARY)
+              ->null_first_cmp_(lhs, rhs, cmp_ret, access_ctx);
+  } else {
+    // Binary VARCHAR collation compares every byte, including trailing spaces.
+    // Document IDs do not require the generic charset lookup and validation.
+    const uint32_t common_len = lhs.len_ < rhs.len_ ? lhs.len_ : rhs.len_;
+    // Expose the usual 16-byte ID width to the compiler so it can inline the
+    // byte comparison. Other lengths retain the same binary collation order.
+    const int byte_cmp = common_len == 16 ? MEMCMP(lhs.ptr_, rhs.ptr_, 16)
+        : (common_len == 0 ? 0 : MEMCMP(lhs.ptr_, rhs.ptr_, common_len));
+    cmp_ret = byte_cmp > 0 ? 1 : (byte_cmp < 0 ? -1
+        : (lhs.len_ > rhs.len_ ? 1 : (lhs.len_ < rhs.len_ ? -1 : 0)));
+  }
+  return ret;
+}
+
+inline common::ObDatumCmpFuncType get_domain_id_cmp_func(
+    const common::ObObjType type, const common::ObCollationType cs_type)
+{
+  common::ObDatumCmpFuncType cmp_func = nullptr;
+  if (common::ObVarcharType == type && common::CS_TYPE_BINARY == cs_type) {
+    cmp_func = compare_binary_domain_ids;
+  } else {
+    common::ObDatumBasicFuncs *basic_funcs = ObDatumFuncs::get_basic_func(type, cs_type);
+    if (nullptr != basic_funcs) {
+      cmp_func = basic_funcs->null_first_cmp_;
+    }
+  }
+  return cmp_func;
+}
+
 class ObDomainIdCmp
 {
 public:
@@ -45,13 +82,10 @@ int ObDomainIdCmp::init(const ObObjMeta &obj_meta)
     ret = OB_INVALID_ARGUMENT;
     STORAGE_LOG(WARN,"invalid argument", K(ret), K(obj_meta));
   } else {
-    common::ObDatumBasicFuncs *id_basic_funcs = ObDatumFuncs::get_basic_func(
-      obj_meta.get_type(), obj_meta.get_collation_type());
-    if (OB_ISNULL(id_basic_funcs)) {
+    cmp_func_ = get_domain_id_cmp_func(obj_meta.get_type(), obj_meta.get_collation_type());
+    if (OB_ISNULL(cmp_func_)) {
       ret = OB_ERR_UNEXPECTED;
       STORAGE_LOG(WARN,"failed to get basic functions", K(ret), K(obj_meta));
-    } else {
-      cmp_func_ = id_basic_funcs->null_first_cmp_;
     }
   }
   return ret;

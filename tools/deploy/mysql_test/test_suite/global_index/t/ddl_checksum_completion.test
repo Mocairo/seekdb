@@ -1,0 +1,59 @@
+# Verify that online index DDL returns only after the complete index is usable.
+# Read every row immediately after DDL; do not add waits or index-status polling.
+
+--disable_warnings
+DROP DATABASE IF EXISTS btree_checksum_completion_regression;
+--enable_warnings
+CREATE DATABASE btree_checksum_completion_regression;
+USE btree_checksum_completion_regression;
+
+CREATE TABLE index_build_rows (
+  id INT PRIMARY KEY,
+  key_col INT,
+  unique_col VARCHAR(32),
+  payload VARCHAR(64)
+);
+
+INSERT INTO index_build_rows VALUES
+  (1, 10, 'alpha', 'row-1'),
+  (2, NULL, 'beta', 'row-2'),
+  (3, 10, 'gamma', 'row-3'),
+  (4, -7, 'delta', 'row-4'),
+  (5, 0, 'epsilon', 'row-5'),
+  (6, 99, 'zeta', 'row-6'),
+  (7, NULL, 'eta', 'row-7'),
+  (8, -7, 'theta', 'row-8');
+
+--echo # Nonempty BTREE build: complete covering and table-lookup results.
+CREATE INDEX idx_btree ON index_build_rows(key_col, unique_col);
+SELECT id, key_col, unique_col FROM index_build_rows FORCE INDEX (idx_btree) ORDER BY id;
+SELECT id, key_col, unique_col, payload FROM index_build_rows FORCE INDEX (idx_btree) ORDER BY id;
+
+--echo # DML immediately after the build updates all index entries.
+INSERT INTO index_build_rows VALUES (9, 10, 'iota', 'row-9');
+UPDATE index_build_rows SET key_col = -7, unique_col = 'gamma-updated', payload = 'updated-row-3' WHERE id = 3;
+DELETE FROM index_build_rows WHERE id = 4;
+SELECT id, key_col, unique_col, payload FROM index_build_rows FORCE INDEX (idx_btree) ORDER BY id;
+
+--echo # A unique index is complete and enforces conflicts immediately.
+CREATE UNIQUE INDEX idx_unique ON index_build_rows(unique_col);
+SELECT id, key_col, unique_col, payload FROM index_build_rows FORCE INDEX (idx_unique) ORDER BY id;
+--error 1062
+INSERT INTO index_build_rows VALUES (10, 100, 'alpha', 'rejected-insert');
+--error 1062
+UPDATE index_build_rows SET unique_col = 'alpha', payload = 'rejected-update' WHERE id = 2;
+SELECT id, key_col, unique_col, payload FROM index_build_rows FORCE INDEX (idx_unique) ORDER BY id;
+
+--echo # A failed unique build preserves the table and its existing indexes.
+--error 1062
+CREATE UNIQUE INDEX idx_rejected ON index_build_rows(key_col);
+SELECT index_name, non_unique, seq_in_index, column_name
+  FROM information_schema.statistics
+  WHERE table_schema = 'btree_checksum_completion_regression' AND table_name = 'index_build_rows'
+  ORDER BY index_name, seq_in_index;
+SELECT id, key_col, unique_col, payload FROM index_build_rows FORCE INDEX (idx_btree) ORDER BY id;
+INSERT INTO index_build_rows VALUES (10, -7, 'kappa', 'after-failed-build');
+SELECT id, key_col, unique_col, payload FROM index_build_rows FORCE INDEX (idx_btree) ORDER BY id;
+SELECT id, key_col, unique_col, payload FROM index_build_rows FORCE INDEX (idx_unique) ORDER BY id;
+
+DROP DATABASE btree_checksum_completion_regression;

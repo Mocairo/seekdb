@@ -1,0 +1,126 @@
+DROP DATABASE IF EXISTS btree_checksum_completion_regression;
+CREATE DATABASE btree_checksum_completion_regression;
+USE btree_checksum_completion_regression;
+CREATE TABLE index_build_rows (
+id INT PRIMARY KEY,
+key_col INT,
+unique_col VARCHAR(32),
+payload VARCHAR(64)
+);
+INSERT INTO index_build_rows VALUES
+(1, 10, 'alpha', 'row-1'),
+(2, NULL, 'beta', 'row-2'),
+(3, 10, 'gamma', 'row-3'),
+(4, -7, 'delta', 'row-4'),
+(5, 0, 'epsilon', 'row-5'),
+(6, 99, 'zeta', 'row-6'),
+(7, NULL, 'eta', 'row-7'),
+(8, -7, 'theta', 'row-8');
+# Nonempty BTREE build: complete covering and table-lookup results.
+CREATE INDEX idx_btree ON index_build_rows(key_col, unique_col);
+SELECT id, key_col, unique_col FROM index_build_rows FORCE INDEX (idx_btree) ORDER BY id;
+id	key_col	unique_col
+1	10	alpha
+2	NULL	beta
+3	10	gamma
+4	-7	delta
+5	0	epsilon
+6	99	zeta
+7	NULL	eta
+8	-7	theta
+SELECT id, key_col, unique_col, payload FROM index_build_rows FORCE INDEX (idx_btree) ORDER BY id;
+id	key_col	unique_col	payload
+1	10	alpha	row-1
+2	NULL	beta	row-2
+3	10	gamma	row-3
+4	-7	delta	row-4
+5	0	epsilon	row-5
+6	99	zeta	row-6
+7	NULL	eta	row-7
+8	-7	theta	row-8
+# DML immediately after the build updates all index entries.
+INSERT INTO index_build_rows VALUES (9, 10, 'iota', 'row-9');
+UPDATE index_build_rows SET key_col = -7, unique_col = 'gamma-updated', payload = 'updated-row-3' WHERE id = 3;
+DELETE FROM index_build_rows WHERE id = 4;
+SELECT id, key_col, unique_col, payload FROM index_build_rows FORCE INDEX (idx_btree) ORDER BY id;
+id	key_col	unique_col	payload
+1	10	alpha	row-1
+2	NULL	beta	row-2
+3	-7	gamma-updated	updated-row-3
+5	0	epsilon	row-5
+6	99	zeta	row-6
+7	NULL	eta	row-7
+8	-7	theta	row-8
+9	10	iota	row-9
+# A unique index is complete and enforces conflicts immediately.
+CREATE UNIQUE INDEX idx_unique ON index_build_rows(unique_col);
+SELECT id, key_col, unique_col, payload FROM index_build_rows FORCE INDEX (idx_unique) ORDER BY id;
+id	key_col	unique_col	payload
+1	10	alpha	row-1
+2	NULL	beta	row-2
+3	-7	gamma-updated	updated-row-3
+5	0	epsilon	row-5
+6	99	zeta	row-6
+7	NULL	eta	row-7
+8	-7	theta	row-8
+9	10	iota	row-9
+INSERT INTO index_build_rows VALUES (10, 100, 'alpha', 'rejected-insert');
+ERROR 23000: Duplicate entry 'alpha' for key 'idx_unique'
+UPDATE index_build_rows SET unique_col = 'alpha', payload = 'rejected-update' WHERE id = 2;
+ERROR 23000: Duplicate entry 'alpha' for key 'idx_unique'
+SELECT id, key_col, unique_col, payload FROM index_build_rows FORCE INDEX (idx_unique) ORDER BY id;
+id	key_col	unique_col	payload
+1	10	alpha	row-1
+2	NULL	beta	row-2
+3	-7	gamma-updated	updated-row-3
+5	0	epsilon	row-5
+6	99	zeta	row-6
+7	NULL	eta	row-7
+8	-7	theta	row-8
+9	10	iota	row-9
+# A failed unique build preserves the table and its existing indexes.
+CREATE UNIQUE INDEX idx_rejected ON index_build_rows(key_col);
+ERROR 23000: Duplicate entry '-7' for key 'idx_rejected'
+SELECT index_name, non_unique, seq_in_index, column_name
+FROM information_schema.statistics
+WHERE table_schema = 'btree_checksum_completion_regression' AND table_name = 'index_build_rows'
+  ORDER BY index_name, seq_in_index;
+index_name	non_unique	seq_in_index	column_name
+idx_btree	1	1	key_col
+idx_btree	1	2	unique_col
+idx_unique	0	1	unique_col
+PRIMARY	0	1	id
+SELECT id, key_col, unique_col, payload FROM index_build_rows FORCE INDEX (idx_btree) ORDER BY id;
+id	key_col	unique_col	payload
+1	10	alpha	row-1
+2	NULL	beta	row-2
+3	-7	gamma-updated	updated-row-3
+5	0	epsilon	row-5
+6	99	zeta	row-6
+7	NULL	eta	row-7
+8	-7	theta	row-8
+9	10	iota	row-9
+INSERT INTO index_build_rows VALUES (10, -7, 'kappa', 'after-failed-build');
+SELECT id, key_col, unique_col, payload FROM index_build_rows FORCE INDEX (idx_btree) ORDER BY id;
+id	key_col	unique_col	payload
+1	10	alpha	row-1
+2	NULL	beta	row-2
+3	-7	gamma-updated	updated-row-3
+5	0	epsilon	row-5
+6	99	zeta	row-6
+7	NULL	eta	row-7
+8	-7	theta	row-8
+9	10	iota	row-9
+10	-7	kappa	after-failed-build
+SELECT id, key_col, unique_col, payload FROM index_build_rows FORCE INDEX (idx_unique) ORDER BY id;
+id	key_col	unique_col	payload
+1	10	alpha	row-1
+2	NULL	beta	row-2
+3	-7	gamma-updated	updated-row-3
+5	0	epsilon	row-5
+6	99	zeta	row-6
+7	NULL	eta	row-7
+8	-7	theta	row-8
+9	10	iota	row-9
+10	-7	kappa	after-failed-build
+DROP DATABASE btree_checksum_completion_regression;

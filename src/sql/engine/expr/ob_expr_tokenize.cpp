@@ -58,7 +58,7 @@ int ObExprTokenize::eval_tokenize(const ObExpr &expr, ObEvalCtx &ctx, ObDatum &e
   common::ObArenaAllocator &temp_allocator = tmp_alloc_g.get_allocator();
 
   ObIJsonBase *json_result = nullptr;
-  TokenizeParam param;
+  TokenizeParam param(temp_allocator);
 
   // check param num, which is checked in ObExprOperator::calc_result_typeN.
   if (OB_UNLIKELY(expr.arg_cnt_ < 1 || expr.arg_cnt_ > 3)) {
@@ -86,11 +86,9 @@ int ObExprTokenize::tokenize_fulltext(const TokenizeParam &param,
   int64_t doc_len = 0;
   storage::ObFTWordMap token_map;
 
-  ObArenaAllocator tmp_parse_alloc(ObMemAttr("Tmp buffer"));
-
   if (TokenizeParam::OUTPUT_MODE::DEFAULT != mode && TokenizeParam::OUTPUT_MODE::ALL != mode) {
     ret = OB_INVALID_ARGUMENT;
-  } else if (OB_FAIL(tokenize_helper.init(&allocator, param.parser_name_, param.properties_))) {
+  } else if (OB_FAIL(tokenize_helper.init(&allocator, param.parser_name_, param.parsed_properties_))) {
   } else if (OB_FAIL(token_map.create(ft_word_bkt_cnt, common::ObMemAttr("FTWordMap")))) {
   } else if (
       (0 != param.fulltext_.length())
@@ -103,7 +101,7 @@ int ObExprTokenize::tokenize_fulltext(const TokenizeParam &param,
   } else {
     switch (param.output_mode_) {
     case TokenizeParam::OUTPUT_MODE::DEFAULT: {
-      if (OB_FAIL(tokenize_helper.make_token_array_json(token_map, result))) {
+      if (OB_FAIL(tokenize_helper.make_token_array_json_bin(token_map, result))) {
       } else {
         // pass
       }
@@ -123,8 +121,8 @@ int ObExprTokenize::tokenize_fulltext(const TokenizeParam &param,
   return ret;
 }
 
-ObExprTokenize::TokenizeParam ::TokenizeParam()
-  : allocator_(ObMemAttr("TokenizeParam")),
+ObExprTokenize::TokenizeParam::TokenizeParam(common::ObIAllocator &allocator)
+  : allocator_(allocator),
     parser_name_(ObString(OB_DEFAULT_FULLTEXT_PARSER_NAME)),
     meta_(),
     fulltext_(),
@@ -200,12 +198,7 @@ int ObExprTokenize::parse_param(const ObExpr &expr,
 {
   int ret = OB_SUCCESS;
 
-  ObDatum *parser_params_datum;
-  ObString raw_parser_name = ObString::make_string(OB_DEFAULT_FULLTEXT_PARSER_NAME);
-
-  ObEvalCtx::TempAllocGuard tmp_alloc_g(ctx);
-  
-  MultimodeAlloctor temp_allocator(tmp_alloc_g.get_allocator());
+  MultimodeAlloctor temp_allocator(allocator);
 
   if (OB_UNLIKELY(expr.arg_cnt_ < 1 || expr.arg_cnt_ > 3)) {
     ret = OB_INVALID_ARGUMENT;
@@ -375,15 +368,33 @@ int ObExprTokenize::parse_parser_properties(const ObExpr &expr,
 int ObExprTokenize::TokenizeParam::reform_parser_properties(const ObString &properties)
 {
   int ret = OB_SUCCESS;
-  storage::ObFTParserJsonProps parser_properties;
+  storage::ObFTParser parser;
 
-  if (OB_FAIL(parser_properties.init())) {
-  } else if (OB_FAIL(parser_properties.parse_from_valid_str(properties))) {
-    LOG_USER_ERROR(OB_INVALID_ARGUMENT, "parser properties invalid.");
-  } else if (OB_FAIL(parser_properties.rebuild_props_for_ddl(parser_name_,
-                                                             ObCollationType::CS_TYPE_UTF8MB4_BIN,
-                                                             true))) {
-  } else if (OB_FAIL(parser_properties.to_format_json(allocator_, properties_))) {
+  if (properties.empty()) {
+    // No overrides: the scalar defaults match the rebuilt JSON for every parser.
+    // Keep the IK property-name literals used by parse_for_parser_helper().
+    if (parser_name_.empty()) {
+      ret = OB_INVALID_ARGUMENT;
+    } else if (OB_FAIL(parser.parse_from_str(parser_name_.ptr(), parser_name_.length()))) {
+    } else {
+      parsed_properties_ = storage::ObFTParserProperty();
+      if (parser.is_ik()) {
+        parsed_properties_.dict_table_ = ObString(storage::ObFTSLiteral::CONFIG_NAME_DICT_TABLE);
+        parsed_properties_.stopword_table_ = ObString(storage::ObFTSLiteral::CONFIG_NAME_STOPWORD_TABLE);
+        parsed_properties_.quantifier_table_ = ObString(storage::ObFTSLiteral::CONFIG_NAME_QUANTIFIER_TABLE);
+      }
+    }
+  } else {
+    storage::ObFTParserJsonProps parser_properties;
+    if (OB_FAIL(parser_properties.init())) {
+    } else if (OB_FAIL(parser_properties.parse_from_valid_str(properties))) {
+      LOG_USER_ERROR(OB_INVALID_ARGUMENT, "parser properties invalid.");
+    } else if (OB_FAIL(parser_properties.rebuild_props_for_ddl(parser_name_,
+                                                               ObCollationType::CS_TYPE_UTF8MB4_BIN,
+                                                               true))) {
+    } else if (OB_FAIL(parser.parse_from_str(parser_name_.ptr(), parser_name_.length()))) {
+    } else if (OB_FAIL(parsed_properties_.parse_for_parser_helper(parser, parser_properties))) {
+    }
   }
 
   return ret;

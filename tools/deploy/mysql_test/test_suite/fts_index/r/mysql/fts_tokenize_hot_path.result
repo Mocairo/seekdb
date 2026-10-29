@@ -1,0 +1,66 @@
+set names utf8mb4;
+select tokenize('中华人民共和国人民大会堂，全文索引数据库 ABC-123 1,234.5 ＡＢＣ１２３ カタカナ 😀', 'ik') as tokens;
+tokens
+["全文索引", "1,234.5", "ａｂｃ１２３", "中华人民共和国", "abc-123", "数据库", "カ", "人民大会堂", "ナ", "タ"]
+select tokenize('中华人民共和国人民大会堂，全文索引数据库 ABC-123 1,234.5 ＡＢＣ１２３ カタカナ 😀', 'ik',
+'[{"output":"all"},{"additional_args":[{"ik_mode":"smart"}]}]') as tokens;
+tokens
+{"tokens": [{"全文索引": 1}, {"1,234.5": 1}, {"ａｂｃ１２３": 1}, {"中华人民共和国": 1}, {"abc-123": 1}, {"数据库": 1}, {"カ": 2}, {"人民大会堂": 1}, {"ナ": 1}, {"タ": 1}], "doc_len": 11}
+select tokenize('中华人民共和国人民大会堂，全文索引数据库 ABC-123 1,234.5 ＡＢＣ１２３ カタカナ 😀', 'ik',
+'[{"output":"all"},{"additional_args":[{"ik_mode":"max_word"}]}]') as tokens;
+tokens
+{"tokens": [{"会堂": 1}, {"全文索引": 1}, {"共和": 1}, {"中华人民": 1}, {"数据": 1}, {"国人": 1}, {"人民": 2}, {"人民共和国": 1}, {"华人": 1}, {"234.5": 1}, {"库": 1}, {"1,234.5": 1}, {"ａｂｃ１２３": 1}, {"全文": 1}, {"共和国": 1}, {"中华人民共和国": 1}, {"1": 1}, {"大会": 1}, {"123": 1}, {"索引": 1}, {"abc": 1}, {"abc-123": 1}, {"数据库": 1}, {"１２３": 1}, {"人民大会": 1}, {"中华": 1}, {"カ": 2}, {"ａｂｃ": 1}, {"大会堂": 1}, {"人民大会堂": 1}, {"ナ": 1}, {"タ": 1}], "doc_len": 34}
+select tokenize('数据库 DATABASE database 全文索引 数据库 DATABASE database 全文索引', 'ik',
+'[{"output":"all"},{"additional_args":[{"ik_mode":"smart"}]}]') as tokens;
+tokens
+{"tokens": [{"database": 4}, {"数据库": 2}, {"全文索引": 2}], "doc_len": 8}
+select tokenize('The THE thé á search SEARCH searching running runners', 'beng', '[{"output":"all"}]') as tokens;
+tokens
+{"tokens": [{"running": 1}, {"runners": 1}, {"searching": 1}, {"search": 2}], "doc_len": 5}
+select tokenize(_utf8mb4'THE thé á search SEARCH searching' collate utf8mb4_bin, 'space', '[{"output":"all"}]') as tokens;
+tokens
+{"tokens": [{"searching": 1}, {"search": 2}], "doc_len": 3}
+select tokenize(_utf8mb4'THE thé á search SEARCH searching' collate utf8mb4_general_ci, 'space', '[{"output":"all"}]') as tokens;
+tokens
+{"tokens": [{"searching": 1}, {"search": 2}], "doc_len": 3}
+select tokenize('', 'ik', '[{"output":"all"},{"additional_args":[{"ik_mode":"smart"}]}]') as tokens;
+tokens
+{"tokens": [], "doc_len": 0}
+select tokenize(NULL, 'beng', '[{"output":"all"}]') as tokens;
+tokens
+{"tokens": [], "doc_len": 0}
+select tokenize('the and or a an', 'beng', '[{"output":"all"}]') as tokens;
+tokens
+{"tokens": [{"and": 1}], "doc_len": 1}
+prepare tokenizer from 'select tokenize(?, ?, ?) as tokens';
+set @text = 'ABC database database 数据库全文索引';
+set @parser = 'ik';
+set @options = '[{"output":"all"},{"additional_args":[{"ik_mode":"smart"}]}]';
+execute tokenizer using @text, @parser, @options;
+tokens
+{"tokens": [{"database": 2}, {"数据库": 1}, {"abc": 1}, {"全文索引": 1}], "doc_len": 5}
+set @options = '[{"output":"all"},{"additional_args":[{"ik_mode":"max_word"}]}]';
+execute tokenizer using @text, @parser, @options;
+tokens
+{"tokens": [{"数据": 1}, {"索引": 1}, {"database": 2}, {"全文": 1}, {"数据库": 1}, {"abc": 1}, {"全文索引": 1}, {"库": 1}], "doc_len": 9}
+set @parser = 'space';
+set @options = '[{"output":"all"},{"additional_args":[{"min_token_size":3},{"max_token_size":10}]}]';
+execute tokenizer using @text, @parser, @options;
+tokens
+{"tokens": [{"database": 2}, {"abc": 1}, {"数据库全文索引": 1}], "doc_len": 4}
+set @parser = 'ngram';
+set @options = '[{"output":"all"},{"additional_args":[{"ngram_token_size":2}]}]';
+execute tokenizer using @text, @parser, @options;
+tokens
+{"tokens": [{"ab": 3}, {"数据": 1}, {"库全": 1}, {"at": 2}, {"索引": 1}, {"se": 2}, {"da": 2}, {"ba": 2}, {"ta": 2}, {"文索": 1}, {"全文": 1}, {"据库": 1}, {"bc": 1}, {"as": 2}], "doc_len": 22}
+set @parser = 'ngram2';
+set @options = '[{"output":"all"},{"additional_args":[{"min_ngram_size":2},{"max_ngram_size":3}]}]';
+execute tokenizer using @text, @parser, @options;
+tokens
+{"tokens": [{"ab": 3}, {"bas": 2}, {"数据": 1}, {"据库全": 1}, {"库全": 1}, {"库全文": 1}, {"ase": 2}, {"at": 2}, {"索引": 1}, {"se": 2}, {"da": 2}, {"ba": 2}, {"ta": 2}, {"全文索": 1}, {"文索": 1}, {"全文": 1}, {"据库": 1}, {"ata": 2}, {"aba": 2}, {"数据库": 1}, {"tab": 2}, {"abc": 1}, {"dat": 2}, {"bc": 1}, {"as": 2}, {"文索引": 1}], "doc_len": 40}
+set @parser = 'beng';
+set @options = '[{"output":"all"}]';
+execute tokenizer using @text, @parser, @options;
+tokens
+{"tokens": [{"database": 2}, {"abc": 1}, {"数据库全文索引": 1}], "doc_len": 4}
+deallocate prepare tokenizer;

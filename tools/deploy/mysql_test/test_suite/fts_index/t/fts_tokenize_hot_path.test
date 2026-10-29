@@ -1,0 +1,39 @@
+# description: preserve complete TOKENIZE output and dynamic parser properties.
+
+set names utf8mb4;
+
+select tokenize('中华人民共和国人民大会堂，全文索引数据库 ABC-123 1,234.5 ＡＢＣ１２３ カタカナ 😀', 'ik') as tokens;
+select tokenize('中华人民共和国人民大会堂，全文索引数据库 ABC-123 1,234.5 ＡＢＣ１２３ カタカナ 😀', 'ik',
+  '[{"output":"all"},{"additional_args":[{"ik_mode":"smart"}]}]') as tokens;
+select tokenize('中华人民共和国人民大会堂，全文索引数据库 ABC-123 1,234.5 ＡＢＣ１２３ カタカナ 😀', 'ik',
+  '[{"output":"all"},{"additional_args":[{"ik_mode":"max_word"}]}]') as tokens;
+select tokenize('数据库 DATABASE database 全文索引 数据库 DATABASE database 全文索引', 'ik',
+  '[{"output":"all"},{"additional_args":[{"ik_mode":"smart"}]}]') as tokens;
+select tokenize('The THE thé á search SEARCH searching running runners', 'beng', '[{"output":"all"}]') as tokens;
+select tokenize(_utf8mb4'THE thé á search SEARCH searching' collate utf8mb4_bin, 'space', '[{"output":"all"}]') as tokens;
+select tokenize(_utf8mb4'THE thé á search SEARCH searching' collate utf8mb4_general_ci, 'space', '[{"output":"all"}]') as tokens;
+select tokenize('', 'ik', '[{"output":"all"},{"additional_args":[{"ik_mode":"smart"}]}]') as tokens;
+select tokenize(NULL, 'beng', '[{"output":"all"}]') as tokens;
+select tokenize('the and or a an', 'beng', '[{"output":"all"}]') as tokens;
+
+# Reuse the statement while changing both the parser and its properties.
+prepare tokenizer from 'select tokenize(?, ?, ?) as tokens';
+set @text = 'ABC database database 数据库全文索引';
+set @parser = 'ik';
+set @options = '[{"output":"all"},{"additional_args":[{"ik_mode":"smart"}]}]';
+execute tokenizer using @text, @parser, @options;
+set @options = '[{"output":"all"},{"additional_args":[{"ik_mode":"max_word"}]}]';
+execute tokenizer using @text, @parser, @options;
+set @parser = 'space';
+set @options = '[{"output":"all"},{"additional_args":[{"min_token_size":3},{"max_token_size":10}]}]';
+execute tokenizer using @text, @parser, @options;
+set @parser = 'ngram';
+set @options = '[{"output":"all"},{"additional_args":[{"ngram_token_size":2}]}]';
+execute tokenizer using @text, @parser, @options;
+set @parser = 'ngram2';
+set @options = '[{"output":"all"},{"additional_args":[{"min_ngram_size":2},{"max_ngram_size":3}]}]';
+execute tokenizer using @text, @parser, @options;
+set @parser = 'beng';
+set @options = '[{"output":"all"}]';
+execute tokenizer using @text, @parser, @options;
+deallocate prepare tokenizer;

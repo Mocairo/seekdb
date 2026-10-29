@@ -1,0 +1,75 @@
+# description: MATCH membership preserves scores used elsewhere and long-query fallback.
+
+--disable_warnings
+drop database if exists fts_match_membership;
+--enable_warnings
+create database fts_match_membership;
+use fts_match_membership;
+
+create table docs (
+  id bigint primary key,
+  category int,
+  body text,
+  fulltext index ft(body) with parser beng
+) charset utf8mb4;
+insert into docs values
+  (1, 1, 'alpha alpha beta token000 token299'),
+  (2, 2, 'beta gamma token001'),
+  (3, 1, 'alpha gamma token299'),
+  (4, 2, 'delta'), (5, 1, ''), (6, 1, NULL),
+  (7, 1, 'the and or');
+
+# Compare complete result IDs, including other filters and pagination.
+select id from docs where match(body) against('alpha beta') order by id;
+select id from docs where match(body) against('alpha alpha beta absent') order by id;
+select id from docs where match(body) against('alpha beta') and category = 1 order by id;
+select id from docs where match(body) against('alpha beta') order by id limit 1 offset 1;
+select count(*) from (select id from docs where match(body) against('alpha beta') limit 2) t;
+select id from docs where match(body) against('absent') order by id;
+select id from docs where match(body) against('') order by id;
+select id from docs where match(body) against(NULL) order by id;
+select id from docs where match(body) against('the and or') order by id;
+
+# Equivalent MATCH expressions in output, aggregates, aliases and thresholds
+# must retain the actual BM25 score.
+select id, round(match(body) against('alpha beta'), 8) score
+from docs where match(body) against('alpha beta') order by id;
+select id from docs where match(body) against('alpha beta')
+order by match(body) against('alpha beta') desc, id;
+select round(sum(match(body) against('alpha beta')), 8) total_score
+from docs where match(body) against('alpha beta');
+select id, round(score, 8) score from
+  (select /*+ no_merge */ id, match(body) against('alpha beta') score
+   from docs where match(body) against('alpha beta')) t
+where score > 0 order by id;
+prepare threshold_sql from 'select id from docs where match(body) against (?) and match(body) against (?) > ? order by id';
+set @query = 'alpha beta', @threshold = 0;
+execute threshold_sql using @query, @query, @threshold;
+set @threshold = 10;
+execute threshold_sql using @query, @query, @threshold;
+deallocate prepare threshold_sql;
+
+# Boolean syntax continues to use the existing Boolean relevance collector.
+select id from docs where match(body) against('+alpha +beta' in boolean mode) order by id;
+select id from docs where match(body) against('+alpha -beta' in boolean mode) order by id;
+select id, round(match(body) against('+alpha -beta' in boolean mode), 8) score
+from docs where match(body) against('+alpha -beta' in boolean mode) order by id;
+
+# More than 256 distinct terms keeps the TAAT execution path. Several document
+# IDs occur in multiple posting lists and must be returned exactly once.
+set session group_concat_max_len = 65536;
+create table digits (n int primary key);
+insert into digits values (0),(1),(2),(3),(4),(5),(6),(7),(8),(9);
+select group_concat(concat('token', lpad(a.n * 100 + b.n * 10 + c.n, 3, '0'))
+                    order by a.n, b.n, c.n separator ' ')
+into @many_tokens from digits a, digits b, digits c where a.n < 3;
+prepare membership_sql from 'select id from docs where match(body) against (?) order by id';
+set @query = 'alpha beta';
+execute membership_sql using @query;
+execute membership_sql using @many_tokens;
+set @query = 'absent';
+execute membership_sql using @query;
+execute membership_sql using @many_tokens;
+deallocate prepare membership_sql;
+
+drop database fts_match_membership;

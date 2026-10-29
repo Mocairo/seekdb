@@ -1,0 +1,63 @@
+# description: count-only derived tables preserve LIMIT cardinality and ranked consumers.
+--disable_warnings
+drop database if exists fts_count_only_limit;
+--enable_warnings
+create database fts_count_only_limit;
+use fts_count_only_limit;
+create table digits(n int primary key);
+insert into digits values (0),(1),(2),(3),(4),(5),(6),(7),(8),(9);
+create table docs(id bigint primary key, nullable_id bigint, body text,
+  fulltext index ft(body) with parser beng) charset utf8mb4;
+insert into docs
+select n + 1, if(mod(n, 3) = 0, NULL, n + 1),
+  if(mod(n, 7) = 0, NULL, concat(repeat('cobalt ', 1 + mod(n, 9)),
+     if(mod(n, 5) = 0, 'amber ', ''), repeat('filler ', 1 + mod(n, 17))))
+from (select a.n * 10 + b.n n from digits a, digits b) numbers;
+
+# Cardinality depends on all matching rows, the offset and the limit.
+select count(*) from (select id from docs where match(body) against('cobalt amber') limit 0) t;
+select count(*) from (select id from docs where match(body) against('cobalt amber') limit 1) t;
+select count(*) from (select id from docs where match(body) against('cobalt amber') limit 7 offset 5) t;
+select count(*) from (select id from docs where match(body) against('cobalt amber') limit 1000 offset 80) t;
+select count(*) from (select id from docs where match(body) against('cobalt amber') limit 7 offset 200) t;
+select count(*) from (select id from docs where match(body) against('absent') limit 7) t;
+select count(*) from (select id from docs where match(body) against(NULL) limit 7) t;
+select count(*) from (select id from docs where match(body) against('cobalt amber') order by id desc limit 7 offset 5) t;
+select count(*) from (select id from docs where match(body) against('cobalt amber')
+  order by match(body) against('cobalt amber') desc limit 7 offset 5) t;
+
+# The same proof must survive prepared rescans and changing LIMIT/OFFSET values.
+prepare count_sql from 'select count(*) from (select id from docs where match(body) against(?) limit ? offset ?) t';
+set @query = 'cobalt amber', @take = 7, @skip = 5;
+execute count_sql using @query, @take, @skip;
+set @take = 1000, @skip = 80;
+execute count_sql using @query, @take, @skip;
+set @take = 0, @skip = 0;
+execute count_sql using @query, @take, @skip;
+set @query = NULL, @take = 7;
+execute count_sql using @query, @take, @skip;
+set @query = 'cobalt amber', @skip = 200;
+execute count_sql using @query, @take, @skip;
+set @skip = 0;
+execute count_sql using @query, @take, @skip;
+deallocate prepare count_sql;
+
+# Nullable counts, aggregates and filters observe which ranked rows survive.
+select count(nullable_id) from (select nullable_id from docs where match(body) against('cobalt amber') limit 17) t;
+select sum(id) from (select id from docs where match(body) against('cobalt amber') limit 17) t;
+select count(*) from (select id from docs where match(body) against('cobalt amber') limit 17) t where id <= 50;
+select id, round(score, 8) score from (
+  select id, match(body) against('cobalt amber') score from docs
+  where match(body) against('cobalt amber') limit 17 offset 5
+) t order by id;
+select id, round(match(body) against('cobalt amber'), 8) score from docs
+where match(body) against('cobalt amber') order by score desc, id limit 17 offset 5;
+
+# State-changing projections retain the original evaluation and ordering path.
+set @seen = 0;
+select count(*) from (select @seen := id assigned from docs where match(body) against('cobalt amber') limit 7) t;
+select @seen;
+
+delete from docs where mod(id, 2) = 0;
+select count(*) from (select id from docs where match(body) against('cobalt amber') limit 1000 offset 20) t;
+drop database fts_count_only_limit;

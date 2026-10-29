@@ -338,6 +338,38 @@ int ObJsonBin::get_array_element(uint64_t index, ObIJsonBase *&value) const
   return ret;
 }
 
+int ObJsonBin::print_array(ObJsonBuffer &j_buf, uint64_t depth, bool is_pretty) const
+{
+  INIT_SUCC(ret);
+  const uint64_t arr_size = element_count();
+  if (!is_seek_only_ || cursor_ != &local_cursor_ || nullptr != get_update_ctx()
+      || ObJBVerType::J_ARRAY_V0 != get_vertype() || arr_size > INT32_MAX) {
+    ret = ObIJsonBase::print_array(j_buf, depth, is_pretty);
+  } else if (OB_FAIL(j_buf.append("["))) {
+  } else {
+    for (uint64_t i = 0; OB_SUCC(ret) && i < arr_size; ++i) {
+      if (i > 0 && OB_FAIL(ObJsonBaseUtil::append_comma(j_buf, is_pretty))) {
+      } else if (is_pretty && OB_FAIL(ObJsonBaseUtil::append_newline_and_indent(j_buf, depth))) {
+      } else {
+        // The parent metadata is already parsed. Decode only the selected child;
+        // its cursor and context borrow data owned by this live parent.
+        ObJsonBin child(get_allocator());
+        if (OB_FAIL(get_value(static_cast<int>(i), child))) {
+        } else if (OB_FAIL(child.print(j_buf, true, 0, is_pretty, depth))) {
+        }
+      }
+    }
+
+    if (OB_SUCC(ret)) {
+      if (is_pretty && arr_size > 0
+          && OB_FAIL(ObJsonBaseUtil::append_newline_and_indent(j_buf, depth - 1))) {
+      } else if (OB_FAIL(j_buf.append("]"))) {
+      }
+    }
+  }
+  return ret;
+}
+
 int ObJsonBin::get_object_value(uint64_t index, ObIJsonBase *&value) const
 {
   INIT_SUCC(ret);

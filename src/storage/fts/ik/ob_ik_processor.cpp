@@ -41,7 +41,7 @@ int ObIIKProcessor::process(TokenizeContext &ctx)
 
   if (OB_FAIL(ctx.current_char_type(type))) {
   } else if (OB_FAIL(ctx.current_char(ch, char_len))) {
-  } else if (OB_FAIL(process(ctx, ch, char_len, type))) {
+  } else if (OB_FAIL(do_process(ctx, ch, char_len, type))) {
   }
   return ret;
 }

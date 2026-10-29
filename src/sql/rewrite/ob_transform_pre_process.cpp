@@ -20,6 +20,7 @@
 #include "sql/engine/expr/ob_expr_arg_case.h"
 #include "sql/resolver/dml/ob_select_resolver.h"
 #include "sql/rewrite/ob_expand_aggregate_utils.h"
+#include "sql/rewrite/ob_transform_simplify_orderby.h"
 #include "sql/pl/ob_pl_resolver.h"
 #include "sql/engine/expr/ob_expr_align_date4cmp.h"
 #include "query/vector/ob_vector_index_util.h"
@@ -180,6 +181,15 @@ int ObTransformPreProcess::transform_one_stmt(common::ObIArray<ObParentDMLStmt> 
     if (OB_SUCC(ret)) {
       if (stmt->get_match_exprs().count() > 0 &&
           OB_FAIL(preserve_order_for_fulltext_search(stmt, is_happened))) {
+      } else {
+        trans_happened |= is_happened;
+      }
+    }
+    if (OB_SUCC(ret)) {
+      // Full-text statements skip the regular rewrite rules. This independent
+      // proof only removes view ordering whose rows a scalar COUNT(*) cannot see.
+      ObTransformSimplifyOrderby orderby(ctx_);
+      if (OB_FAIL(orderby.remove_order_by_for_count_star_view_if_enabled(stmt, is_happened))) {
       } else {
         trans_happened |= is_happened;
       }

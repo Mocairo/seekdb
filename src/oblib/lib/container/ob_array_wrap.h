@@ -37,7 +37,8 @@ public:
   ObIArrayWrap(T *data, const int64_t count) : data_(data), count_(count) {}
 
   virtual ~ObIArrayWrap() {}
-  inline const T &at(int64_t idx) const
+  // Keep this bounds-checked accessor inline in retrieval and sorting loops.
+  OB_INLINE const T &at(int64_t idx) const
   {
 #ifndef NDEBUG
     extra_access_check();
@@ -45,7 +46,7 @@ public:
     OB_ASSERT(idx >= 0 && idx < count_);
     return data_[idx];
   }
-  inline T &at(int64_t idx)
+  OB_INLINE T &at(int64_t idx)
   {
 #ifndef NDEBUG
     extra_access_check();

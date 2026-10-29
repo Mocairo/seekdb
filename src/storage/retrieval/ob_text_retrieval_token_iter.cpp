@@ -72,19 +72,21 @@ int ObTextRetrievalTokenIter::init(const ObTextRetrievalScanIterParam &iter_para
       OB_ISNULL(inv_scan_domain_id_col_) || OB_ISNULL(allocator_) || OB_ISNULL(mem_context_.ref_context())) {
     ret = OB_ERR_UNEXPECTED;
     LOG_WARN("inv_idx_scan_iter or eval_ctx is NULL", K(ret), K_(inv_idx_scan_iter), KPC_(eval_ctx), KPC_(inv_idx_scan_param), KP(allocator_), KP(mem_context_.ref_context()));
-  } else if (!need_calc_relevance()) {
-  } else if (OB_ISNULL(relevance_expr_) || OB_ISNULL(inv_idx_agg_expr_) || OB_ISNULL(inv_idx_agg_iter_)) {
-    ret = OB_ERR_UNEXPECTED;
-  } else if (OB_ISNULL(inv_scan_doc_length_col_)) {
-    ret = OB_ERR_UNEXPECTED;
-  } else if (OB_FAIL(init_calc_exprs_in_relevance_expr())) {
+  } else if (need_calc_relevance()) {
+    if (OB_ISNULL(relevance_expr_) || OB_ISNULL(inv_idx_agg_expr_) || OB_ISNULL(inv_idx_agg_iter_)
+        || OB_ISNULL(inv_scan_doc_length_col_)) {
+      ret = OB_ERR_UNEXPECTED;
+    } else if (OB_FAIL(init_calc_exprs_in_relevance_expr())) {
+    }
+  }
+  if (OB_FAIL(ret)) {
   } else if (OB_ISNULL(skip_ = sql::to_bit_vector(
                            allocator_->alloc(sql::ObBitVector::memory_size(max_batch_size_))))) {
     ret = OB_ALLOCATE_MEMORY_FAILED;
   } else {
     skip_->init(max_batch_size_);
   }
-  is_inited_ = true;
+  is_inited_ = OB_SUCC(ret);
   return ret;
 }
 
@@ -96,7 +98,7 @@ void ObTextRetrievalTokenIter::reset()
 
 void ObTextRetrievalTokenIter::reuse()
 {
-  if (inv_idx_agg_cache_mode_ && !inv_idx_agg_param_->need_switch_param_) {
+  if (inv_idx_agg_cache_mode_ && OB_NOT_NULL(inv_idx_agg_param_) && !inv_idx_agg_param_->need_switch_param_) {
     // do nothing
   } else {
     token_doc_cnt_calculated_ = false;
@@ -302,9 +304,7 @@ int ObTextRetrievalTokenIter::advance_to(const ObDatum &id_datum)
 int ObTextRetrievalTokenIter::update_scan_param(const ObString &token, common::ObArenaAllocator &allocator)
 {
   int ret = OB_SUCCESS;
-  // Without relevance there is no token-frequency aggregate scan. Reuse the
-  // posting scan's range when advancing TAAT to the next query token.
-  ObTableScanParam *range_param = need_calc_relevance() ? inv_idx_agg_param_ : inv_idx_scan_param_;
+  ObTableScanParam *range_param = need_inv_idx_agg() ? inv_idx_agg_param_ : inv_idx_scan_param_;
   if (OB_ISNULL(range_param) || OB_UNLIKELY(range_param->key_ranges_.count() != 1)) {
     ret = OB_ERR_UNEXPECTED;
   } else {
@@ -416,12 +416,14 @@ ObTextRetrievalDaaTTokenIter::ObTextRetrievalDaaTTokenIter()
     relevance_(),
     doc_id_(),
     cmp_func_(nullptr),
+    doc_id_batch_fixed16_(false),
     is_inited_(false)
 {
 }
 
 int ObTextRetrievalDaaTTokenIter::init(const ObTextRetrievalScanIterParam &iter_param)
 {
+  doc_id_batch_fixed16_ = false;
   int ret = OB_SUCCESS;
   void *buf = nullptr;
   allocator_ = iter_param.allocator_;
@@ -437,8 +439,7 @@ int ObTextRetrievalDaaTTokenIter::init(const ObTextRetrievalScanIterParam &iter_
       relevance_expr_ = iter_param.relevance_expr_;
       inv_scan_domain_id_col_ = iter_param.inv_scan_domain_id_col_;
       max_batch_size_ = OB_MAX(iter_param.eval_ctx_->max_batch_size_, 1);
-      common::ObDatumBasicFuncs *basic_funcs = ObDatumFuncs::get_basic_func(inv_scan_domain_id_col_->datum_meta_.type_, CS_TYPE_BINARY);
-      cmp_func_ = basic_funcs->null_first_cmp_;
+      cmp_func_ = get_domain_id_cmp_func(inv_scan_domain_id_col_->datum_meta_.type_, CS_TYPE_BINARY);
       if (OB_ISNULL(cmp_func_)) {
         ret = OB_ERR_UNEXPECTED;
       } else if (FALSE_IT(relevance_.set_allocator(allocator_))) {
@@ -457,6 +458,7 @@ int ObTextRetrievalDaaTTokenIter::init(const ObTextRetrievalScanIterParam &iter_
 
 void ObTextRetrievalDaaTTokenIter::reuse()
 {
+  doc_id_batch_fixed16_ = false;
   cur_idx_ = -1;
   count_ = 0;
   token_iter_->reuse();
@@ -464,6 +466,7 @@ void ObTextRetrievalDaaTTokenIter::reuse()
 
 void ObTextRetrievalDaaTTokenIter::reset()
 {
+  doc_id_batch_fixed16_ = false;
   relevance_.reset();
   doc_id_.reset();
   token_iter_->reset();
@@ -476,6 +479,7 @@ int ObTextRetrievalDaaTTokenIter::get_next_row() {
   int ret = OB_SUCCESS;
   bool need_load = false;
   if (OB_LIKELY((++cur_idx_) < count_)) {
+  } else if (FALSE_IT(doc_id_batch_fixed16_ = false)) {
   } else if (!eval_ctx_->is_vectorized() && (OB_FAIL(token_iter_->get_next_row()))) {
     if (OB_UNLIKELY(OB_ITER_END != ret)) {
     }
@@ -501,6 +505,7 @@ int ObTextRetrievalDaaTTokenIter::get_next_row() {
 
 int ObTextRetrievalDaaTTokenIter::save_relevances_and_docids()
 {
+  doc_id_batch_fixed16_ = false;
   int ret = OB_SUCCESS;
   if (OB_ISNULL(relevance_expr_) || OB_ISNULL(inv_scan_domain_id_col_)) {
     ret = OB_INVALID_ARGUMENT;
@@ -509,10 +514,12 @@ int ObTextRetrievalDaaTTokenIter::save_relevances_and_docids()
     cur_idx_ = 0;
     const ObDatumVector &relevance_datum = relevance_expr_->locate_expr_datumvector(*eval_ctx_);
     const ObDatumVector &doc_id_datum = inv_scan_domain_id_col_->locate_expr_datumvector(*eval_ctx_);
+    double *relevances = relevance_.get_data();
+    ObDocIdExt *doc_ids = doc_id_.get_data();
     for (int64_t i = 0; OB_SUCC(ret) && i < count_; ++i) {
       if (OB_LIKELY(!token_iter_->get_skip()->at(i))) {
-        relevance_[i] = relevance_datum.at(i)->get_double();
-        if (OB_FAIL(doc_id_[i].from_datum(*doc_id_datum.at(i)))) {
+        relevances[i] = relevance_datum.at(i)->get_double();
+        if (OB_FAIL(doc_ids[i].from_datum(*doc_id_datum.at(i)))) {
         }
       }
     }
@@ -522,20 +529,44 @@ int ObTextRetrievalDaaTTokenIter::save_relevances_and_docids()
 
 int ObTextRetrievalDaaTTokenIter::save_docids()
 {
+  doc_id_batch_fixed16_ = false;
+  bool fixed16_ids = count_ > 0;
   int ret = OB_SUCCESS;
   if (OB_ISNULL(inv_scan_domain_id_col_)) {
     ret = OB_INVALID_ARGUMENT;
   } else {
     cur_idx_ = 0;
-    const ObDatumVector &doc_id_datum = inv_scan_domain_id_col_->locate_expr_datumvector(*eval_ctx_);
     const sql::ObBitVector *skip = token_iter_->get_skip();
-    for (int64_t i = 0; OB_SUCC(ret) && i < count_; ++i) {
-      if (OB_ISNULL(skip) || OB_LIKELY(!skip->at(i))) {
-        if (OB_FAIL(doc_id_[i].from_datum(*doc_id_datum.at(i)))) {
-        };
+    ObDocIdExt *doc_ids = doc_id_.get_data();
+    if (skip->is_all_false(count_)) {
+      const ObDatum *datums = inv_scan_domain_id_col_->locate_batch_datums(*eval_ctx_);
+      if (inv_scan_domain_id_col_->is_batch_result()) {
+        for (int64_t i = 0; OB_SUCC(ret) && i < count_; ++i) {
+          // pack_ == 16 also proves the NULL and special-flag bits are clear.
+          fixed16_ids &= 16 == datums[i].pack_;
+          if (OB_FAIL(doc_ids[i].from_datum(datums[i]))) {
+          }
+        }
+      } else {
+        for (int64_t i = 0; OB_SUCC(ret) && i < count_; ++i) {
+          fixed16_ids &= 16 == datums->pack_;
+          if (OB_FAIL(doc_ids[i].from_datum(*datums))) {
+          }
+        }
+      }
+    } else {
+      // A skipped slot is not freshly copied, so do not prove the whole span.
+      fixed16_ids = false;
+      const ObDatumVector &doc_id_datum = inv_scan_domain_id_col_->locate_expr_datumvector(*eval_ctx_);
+      for (int64_t i = 0; OB_SUCC(ret) && i < count_; ++i) {
+        if (OB_LIKELY(!skip->at(i))) {
+          if (OB_FAIL(doc_ids[i].from_datum(*doc_id_datum.at(i)))) {
+          }
+        }
       }
     }
   }
+  doc_id_batch_fixed16_ = OB_SUCC(ret) && fixed16_ids;
   return ret;
 }
 
@@ -544,23 +575,42 @@ int ObTextRetrievalDaaTTokenIter::get_next_batch(const int64_t capacity, int64_t
   return OB_NOT_IMPLEMENT;
 }
 
+int ObTextRetrievalDaaTTokenIter::get_next_doc_id_batch(const ObDocIdExt *&ids, int64_t &count)
+{
+  int ret = OB_SUCCESS;
+  ids = nullptr;
+  count = 0;
+  if (OB_UNLIKELY(nullptr != relevance_expr_)) {
+    ret = OB_NOT_SUPPORTED;
+  } else if (OB_FAIL(get_next_row())) {
+  } else if (OB_UNLIKELY(cur_idx_ < 0 || cur_idx_ >= count_)) {
+    ret = OB_ERR_UNEXPECTED;
+  } else {
+    ids = doc_id_.get_data() + cur_idx_;
+    count = count_ - cur_idx_;
+    // The borrower consumes this entire span before asking for another one.
+    // Keep its storage untouched until that next fetch.
+    cur_idx_ = count_ - 1;
+  }
+  if (OB_SUCCESS != ret) { doc_id_batch_fixed16_ = false; }
+  return ret;
+}
+
 int ObTextRetrievalDaaTTokenIter::advance_to(const ObDatum &id_datum)
 {
   int ret = OB_SUCCESS;
   int result = 0;
   bool find = false;
+  const ObDocIdExt *doc_ids = doc_id_.get_data();
 
   if (cur_idx_ < 0) {
     ret = OB_ERR_UNEXPECTED;
   }
   while (OB_SUCC(ret) && !find) {
     if (cur_idx_ < count_) {
-      if (OB_FAIL(cmp_func_(
-              id_datum, doc_id_[cur_idx_].get_datum(), result, nullptr))) {
-      } else if (result <= 0) {
-        find = true;
+      if (OB_FAIL(find_cached_text_doc_id(doc_ids, count_, cur_idx_, cmp_func_, id_datum, cur_idx_))) {
       } else {
-        ++cur_idx_;
+        find = cur_idx_ < count_;
       }
     } else if (OB_FAIL(token_iter_->advance_to(id_datum))) {
     } else if (OB_FAIL(get_next_row())) {
@@ -571,7 +621,7 @@ int ObTextRetrievalDaaTTokenIter::advance_to(const ObDatum &id_datum)
     } else if (cur_idx_ != 0) {
       ret = OB_ERR_UNEXPECTED;
     } else if (OB_FAIL(cmp_func_(
-                   id_datum, doc_id_[cur_idx_].get_datum(), result, nullptr))) {
+                   id_datum, doc_ids[cur_idx_].get_datum(), result, nullptr))) {
     } else if (result <= 0) {
       find = true;
     } else {
@@ -584,11 +634,13 @@ int ObTextRetrievalDaaTTokenIter::advance_to(const ObDatum &id_datum)
 int ObTextRetrievalDaaTTokenIter::get_curr_score(double &score) const
 {
   int ret = OB_SUCCESS;
-  score = 0.0;
   if (OB_UNLIKELY(cur_idx_ >= count_)) {
     ret = OB_ARRAY_OUT_OF_RANGE;
   } else if (relevance_expr_) {
-    score = relevance_[cur_idx_];
+    OB_ASSERT(cur_idx_ >= 0);
+    score = relevance_.get_data()[cur_idx_];
+  } else {
+    score = 1.0;
   }
   return ret;
 }
@@ -599,7 +651,8 @@ int ObTextRetrievalDaaTTokenIter::get_curr_id(const ObDatum *&id_datum) const
   if (OB_UNLIKELY(cur_idx_ >= count_)) {
     ret = OB_ARRAY_OUT_OF_RANGE;
   } else {
-    id_datum = &doc_id_[cur_idx_].get_datum();
+    OB_ASSERT(cur_idx_ >= 0);
+    id_datum = &doc_id_.get_data()[cur_idx_].get_datum();
   }
   return ret;
 }

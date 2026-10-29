@@ -11988,6 +11988,70 @@ int ObLogPlan::construct_startup_filter_for_limit(ObRawExpr *limit_expr, ObLogic
   return ret;
 }
 
+// A natural-language posting has a positive score. Its magnitude is unnecessary
+// for the pushed Boolean predicate, but every other consumer must keep BM25.
+// Check equivalent expressions too, since common-expression rewriting can share
+// their output.
+static int check_match_score_consumers(const ObRawExpr *expr,
+                                      const ObMatchFunRawExpr &match_expr,
+                                      const ObRawExpr *membership_filter,
+                                      bool &need_score)
+{
+  int ret = OB_SUCCESS;
+  if (OB_ISNULL(expr)) {
+    ret = OB_ERR_UNEXPECTED;
+  } else if (expr == membership_filter) {
+    // Only this exact predicate subtree in a WHERE clause may use membership.
+  } else if (expr == &match_expr ||
+             (expr->get_expr_type() == match_expr.get_expr_type() && expr->same_as(match_expr))) {
+    need_score = true;
+  } else if (expr->is_exec_param_expr()) {
+    const ObExecParamRawExpr *param = static_cast<const ObExecParamRawExpr *>(expr);
+    if (OB_NOT_NULL(param->get_ref_expr())) {
+      ret = SMART_CALL(check_match_score_consumers(param->get_ref_expr(), match_expr, membership_filter, need_score));
+    }
+  } else {
+    // Alias references expose their referenced expression as a child. Subquery
+    // statements are visited separately by the recursive statement visitor.
+    for (int64_t i = 0; OB_SUCC(ret) && !need_score && i < expr->get_param_count(); ++i) {
+      if (OB_FAIL(SMART_CALL(check_match_score_consumers(expr->get_param_expr(i), match_expr, membership_filter, need_score)))) {
+      }
+    }
+  }
+  return ret;
+}
+
+static int check_stmt_match_score_consumers(const ObDMLStmt &stmt,
+                                           const ObMatchFunRawExpr &match_expr,
+                                           const ObRawExpr &membership_filter,
+                                           bool &need_score)
+{
+  int ret = OB_SUCCESS;
+  ObSEArray<ObRawExpr *, 16> exprs;
+  ObStmtExprGetter getter;
+  getter.set_relation_scope();
+  getter.remove_scope(SCOPE_WHERE);
+  getter.set_recursive(true);
+  if (OB_FAIL(stmt.get_relation_exprs(exprs, getter))) {
+  }
+  for (int64_t i = 0; OB_SUCC(ret) && !need_score && i < exprs.count(); ++i) {
+    if (OB_FAIL(check_match_score_consumers(exprs.at(i), match_expr, nullptr, need_score))) {
+    }
+  }
+  if (OB_SUCC(ret) && !need_score) {
+    exprs.reuse();
+    getter.remove_all();
+    getter.add_scope(SCOPE_WHERE);
+    if (OB_FAIL(stmt.get_relation_exprs(exprs, getter))) {
+    }
+  }
+  for (int64_t i = 0; OB_SUCC(ret) && !need_score && i < exprs.count(); ++i) {
+    if (OB_FAIL(check_match_score_consumers(exprs.at(i), match_expr, &membership_filter, need_score))) {
+    }
+  }
+  return ret;
+}
+
 int ObLogPlan::prepare_text_retrieval_scan(const ObIArray<ObRawExpr *> &scan_match_exprs,
                                            const ObIArray<ObRawExpr *> &scan_match_filters,
                                            const ObIArray<ObRawExpr *> &all_match_filters,
@@ -12040,12 +12104,31 @@ int ObLogPlan::prepare_text_retrieval_scan(const ObIArray<ObRawExpr *> &scan_mat
     ObTextRetrievalInfo &tr_info = table_scan->get_text_retrieval_info();
     tr_info.match_expr_ = match_against;
     tr_info.pushdown_match_filter_ = match_pred;
+    if (match_against->get_mode_flag() == NATURAL_LANGUAGE_MODE
+        && !table_scan->is_vec_idx_scan() && !table_scan->is_vec_adaptive_scan()
+        && match_against->get_columns_boosts().empty()
+        && OB_ISNULL(match_against->get_param_text_expr())
+        && match_pred->get_expr_type() == T_OP_BOOL && match_pred->get_param_count() == 1
+        && match_pred->get_param_expr(0) == match_against) {
+      bool need_score = false;
+      const ObDMLStmt *root_stmt = get_optimizer_context().get_root_stmt();
+      if (OB_ISNULL(root_stmt) || OB_ISNULL(get_stmt())) {
+        // Without the complete consumer tree, retain the general scoring path.
+        need_score = true;
+      } else if (OB_FAIL(check_stmt_match_score_consumers(*root_stmt, *match_against, *match_pred, need_score))) {
+      } else if (root_stmt != get_stmt()
+                 && OB_FAIL(check_stmt_match_score_consumers(*get_stmt(), *match_against, *match_pred, need_score))) {
+      } else {
+        tr_info.need_calc_relevance_ = need_score;
+      }
+    }
     // The mapping table is absent when the data-table rowkey is used as the document ID.
     table_scan->set_doc_id_index_table_id(tr_info.doc_id_idx_tid_);
     if (table_scan->is_vec_adaptive_scan() || table_scan->is_vec_idx_scan_post_filter()) {
       table_scan->set_rowkey_doc_table_id(tr_info.rowkey_idx_tid_);
     }
-    if (OB_FAIL(table_scan->set_is_skip_rowkey_doc(tr_info.doc_id_idx_tid_ == OB_INVALID_ID))) {
+    if (OB_FAIL(ret)) {
+    } else if (OB_FAIL(table_scan->set_is_skip_rowkey_doc(tr_info.doc_id_idx_tid_ == OB_INVALID_ID))) {
     } else if (OB_FAIL(table_scan->set_is_skip_rowkey_doc(tr_info.rowkey_idx_tid_ == OB_INVALID_ID))) {
     }
   }
@@ -12168,47 +12251,6 @@ int ObLogPlan::prepare_text_retrieval_merge(const ObIArray<ObRawExpr *> &merge_m
   return ret;
 }
 
-static int check_match_score_used(const ObDMLStmt *stmt,
-                                  ObRawExpr *match_expr,
-                                  bool &need_calc)
-{
-  int ret = OB_SUCCESS;
-  need_calc = false;
-  if (OB_ISNULL(stmt) || OB_ISNULL(match_expr)) {
-    ret = OB_INVALID_ARGUMENT;
-  } else {
-    // A boolean comparison is still an observable value in SELECT, GROUP BY,
-    // ORDER BY, HAVING, join conditions, etc. Only a standalone WHERE predicate
-    // can be satisfied by the matching document IDs without evaluating a score.
-    ObSEArray<ObRawExpr *, 16> value_exprs;
-    ObStmtExprGetter visitor;
-    visitor.set_relation_scope();
-    visitor.remove_scope(SCOPE_WHERE);
-    if (OB_FAIL(stmt->get_relation_exprs(value_exprs, visitor))) {
-    }
-    for (int64_t i = 0; OB_SUCC(ret) && !need_calc && i < value_exprs.count(); ++i) {
-      if (OB_FAIL(ObRawExprUtils::find_expr(value_exprs.at(i), match_expr, need_calc))) {
-      }
-    }
-    const ObIArray<ObRawExpr *> &conditions = stmt->get_condition_exprs();
-    for (int64_t i = 0; OB_SUCC(ret) && !need_calc && i < conditions.count(); ++i) {
-      ObRawExpr *condition = conditions.at(i);
-      if (condition == match_expr) {
-        // A bare MATCH in WHERE is a boolean filter. The scan result already
-        // identifies matching docs, so the relevance score is not needed.
-      } else if (OB_ISNULL(condition)) {
-        ret = OB_ERR_UNEXPECTED;
-      } else if (condition->get_expr_type() == T_OP_BOOL
-                  && condition->get_param_count() == 1
-                  && condition->get_param_expr(0) == match_expr) {
-        // The resolver's boolean wrapper has the same scan-only semantics.
-      } else if (OB_FAIL(ObRawExprUtils::find_expr(condition, match_expr, need_calc))) {
-      }
-    }
-  }
-  return ret;
-}
-
 int ObLogPlan::prepare_text_retrieval_info(const uint64_t ref_table_id,
                                            const uint64_t index_table_id,
                                            ObMatchFunRawExpr *match_against,
@@ -12225,7 +12267,8 @@ int ObLogPlan::prepare_text_retrieval_info(const uint64_t ref_table_id,
   uint64_t fwd_idx_tid = OB_INVALID_ID;
   uint64_t inv_idx_tid = OB_INVALID_ID;
   ObSEArray<ObAuxTableMetaInfo, 4> index_infos;
-  bool need_calc_relevance = false;
+  bool need_calc_relevance = true;
+  ObSEArray<ObExprConstraint, 2> constraints;
   uint64_t docid_col_id = OB_INVALID_ID;
   if (OB_ISNULL(match_against) || OB_ISNULL(get_stmt()) || OB_ISNULL(get_optimizer_context().get_query_ctx())) {
     ret = OB_INVALID_ARGUMENT;
@@ -12292,21 +12335,18 @@ int ObLogPlan::prepare_text_retrieval_info(const uint64_t ref_table_id,
     }
   }
   if (OB_SUCC(ret)) {
-    ObQueryCtx *query_ctx = get_optimizer_context().get_query_ctx();
-    bool score_used = false;
-    if (OB_ISNULL(query_ctx)) {
-      ret = OB_ERR_UNEXPECTED;
-    } else if (OB_FAIL(check_match_score_used(get_stmt(),
-                                              match_against,
-                                              score_used))) {
-      LOG_WARN("failed to check need calc match score, fallback to calc", K(ret));
-      need_calc_relevance = true;
-      ret = OB_SUCCESS;
-    } else {
-      // Boolean mode needs the match result to evaluate the boolean filter,
-      // so relevance has to be calculated even when the score is not selected.
-      need_calc_relevance = score_used || BOOLEAN_MODE == match_against->get_mode_flag();
+    /*
+    if (OB_FAIL(ObTransformUtils::check_need_calc_match_score(get_optimizer_context().get_exec_ctx(),
+                                                              get_stmt(),
+                                                              match_against,
+                                                              need_calc_relevance,
+                                                              constraints))) {
+      LOG_WARN("failed to check need calc relevance", K(ret));
+    } else if (!need_calc_relevance &&
+               OB_FAIL(append_array_no_dup(get_optimizer_context().get_query_ctx()->all_expr_constraints_, constraints))) {
+      LOG_WARN("failed to append array no dup", K(ret));
     }
+    */
     tr_info.match_expr_ = match_against;
     tr_info.inv_idx_tid_ = inv_idx_tid;
     tr_info.fwd_idx_tid_ = fwd_idx_tid;

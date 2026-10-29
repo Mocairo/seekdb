@@ -269,6 +269,7 @@ seekdb_test_interface(
     deps = [
         ":_textual_sql_map_inputs",
         ":sql_runtime_internal_headers",
+        "//src/storage:storage_runtime_interface",
     ] + sorted({
         dep: True
         for dep in (

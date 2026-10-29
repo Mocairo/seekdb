@@ -40,7 +40,15 @@ public:
 
   int remove_order_by_for_view_stmt(ObDMLStmt *stmt, bool &trans_happened, bool &force_serial_set_order);
 
-  int do_remove_stmt_order_by(ObSelectStmt *select_stmt, bool &trans_happened);
+  static int remove_order_by_for_count_star_view(ObDMLStmt *stmt, bool &trans_happened);
+
+  static int prune_count_star_view_projection(ObDMLStmt *stmt,
+                                              ObTransformerCtx *ctx,
+                                              bool &trans_happened);
+
+  int remove_order_by_for_count_star_view_if_enabled(ObDMLStmt *stmt, bool &trans_happened);
+
+  static int do_remove_stmt_order_by(ObSelectStmt *select_stmt, bool &trans_happened);
 
   int remove_order_by_duplicates(ObDMLStmt *stmt,
                                  bool &trans_happened);

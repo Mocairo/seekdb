@@ -1,0 +1,129 @@
+drop database if exists fts_count_only_limit;
+create database fts_count_only_limit;
+use fts_count_only_limit;
+create table digits(n int primary key);
+insert into digits values (0),(1),(2),(3),(4),(5),(6),(7),(8),(9);
+create table docs(id bigint primary key, nullable_id bigint, body text,
+fulltext index ft(body) with parser beng) charset utf8mb4;
+insert into docs
+select n + 1, if(mod(n, 3) = 0, NULL, n + 1),
+if(mod(n, 7) = 0, NULL, concat(repeat('cobalt ', 1 + mod(n, 9)),
+if(mod(n, 5) = 0, 'amber ', ''), repeat('filler ', 1 + mod(n, 17))))
+from (select a.n * 10 + b.n n from digits a, digits b) numbers;
+select count(*) from (select id from docs where match(body) against('cobalt amber') limit 0) t;
+count(*)
+0
+select count(*) from (select id from docs where match(body) against('cobalt amber') limit 1) t;
+count(*)
+1
+select count(*) from (select id from docs where match(body) against('cobalt amber') limit 7 offset 5) t;
+count(*)
+7
+select count(*) from (select id from docs where match(body) against('cobalt amber') limit 1000 offset 80) t;
+count(*)
+5
+select count(*) from (select id from docs where match(body) against('cobalt amber') limit 7 offset 200) t;
+count(*)
+0
+select count(*) from (select id from docs where match(body) against('absent') limit 7) t;
+count(*)
+0
+select count(*) from (select id from docs where match(body) against(NULL) limit 7) t;
+count(*)
+0
+select count(*) from (select id from docs where match(body) against('cobalt amber') order by id desc limit 7 offset 5) t;
+count(*)
+7
+select count(*) from (select id from docs where match(body) against('cobalt amber')
+order by match(body) against('cobalt amber') desc limit 7 offset 5) t;
+count(*)
+7
+prepare count_sql from 'select count(*) from (select id from docs where match(body) against(?) limit ? offset ?) t';
+set @query = 'cobalt amber', @take = 7, @skip = 5;
+execute count_sql using @query, @take, @skip;
+count(*)
+7
+set @take = 1000, @skip = 80;
+execute count_sql using @query, @take, @skip;
+count(*)
+5
+set @take = 0, @skip = 0;
+execute count_sql using @query, @take, @skip;
+count(*)
+0
+set @query = NULL, @take = 7;
+execute count_sql using @query, @take, @skip;
+count(*)
+0
+set @query = 'cobalt amber', @skip = 200;
+execute count_sql using @query, @take, @skip;
+count(*)
+0
+set @skip = 0;
+execute count_sql using @query, @take, @skip;
+count(*)
+7
+deallocate prepare count_sql;
+select count(nullable_id) from (select nullable_id from docs where match(body) against('cobalt amber') limit 17) t;
+count(nullable_id)
+11
+select sum(id) from (select id from docs where match(body) against('cobalt amber') limit 17) t;
+sum(id)
+862
+select count(*) from (select id from docs where match(body) against('cobalt amber') limit 17) t where id <= 50;
+count(*)
+8
+select id, round(score, 8) score from (
+select id, match(body) against('cobalt amber') score from docs
+where match(body) against('cobalt amber') limit 17 offset 5
+) t order by id;
+id	score
+11	1.65188746
+16	1.40056653
+18	0.48529412
+26	1.62088423
+31	1.50818968
+35	0.48298573
+41	1.81686886
+46	1.55774244
+51	1.38366071
+52	0.48004988
+53	0.47826087
+54	0.47687861
+61	1.60895019
+66	1.47147442
+76	1.79402401
+81	1.45548102
+96	1.59400251
+select id, round(match(body) against('cobalt amber'), 8) score from docs
+where match(body) against('cobalt amber') order by score desc, id limit 17 offset 5;
+id	score
+41	1.81686886
+76	1.79402401
+11	1.65188746
+26	1.62088423
+61	1.60895019
+96	1.59400251
+46	1.55774244
+31	1.50818968
+66	1.47147442
+81	1.45548102
+16	1.40056653
+51	1.38366071
+18	0.48529412
+35	0.48298573
+52	0.48004988
+53	0.47826087
+54	0.47687861
+set @seen = 0;
+select count(*) from (select @seen := id assigned from docs where match(body) against('cobalt amber') limit 7) t;
+count(*)
+7
+select @seen;
+@seen
+76
+delete from docs where mod(id, 2) = 0;
+select count(*) from (select id from docs where match(body) against('cobalt amber') limit 1000 offset 20) t;
+count(*)
+22
+drop database fts_count_only_limit;

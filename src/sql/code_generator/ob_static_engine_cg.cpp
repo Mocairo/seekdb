@@ -3681,7 +3681,32 @@ int ObStaticEngineCG::generate_normal_tsc(ObLogTableScan &op, ObTableScanSpec &s
       } else if (ddl_table_schema->is_fts_index_aux() || ddl_table_schema->is_fts_doc_word_aux()) {
         spec.is_fts_ddl_ = true;
         spec.is_fts_index_aux_ = ddl_table_schema->is_fts_index_aux();
-        spec.max_batch_size_ = 0; // TODO: @jinzhu, remove me later after support post-building fts index vectorization.
+        // Expand one document at a time into a token batch. Other output
+        // shapes retain the scalar implementation until they can be broadcast
+        // or generated for every expanded row.
+        int64_t word_expr_count = 0;
+        int64_t count_expr_count = 0;
+        int64_t length_expr_count = 0;
+        int64_t doc_id_expr_count = 0;
+        bool batch_supported = nullptr == spec.pdml_partition_id_;
+        for (int64_t i = 0; batch_supported && i < op.get_output_exprs().count(); ++i) {
+          const ObRawExpr *output = op.get_output_exprs().at(i);
+          if (nullptr == output || !output->is_vectorize_result()) {
+            batch_supported = false;
+          } else {
+            switch (output->get_expr_type()) {
+              case T_FUN_SYS_WORD_SEGMENT: ++word_expr_count; break;
+              case T_FUN_SYS_WORD_COUNT: ++count_expr_count; break;
+              case T_FUN_SYS_DOC_LENGTH: ++length_expr_count; break;
+              case T_REF_COLUMN: ++doc_id_expr_count; break;
+              default: batch_supported = false; break;
+            }
+          }
+        }
+        if (!batch_supported || 1 != word_expr_count || 1 != count_expr_count
+            || 1 != length_expr_count || 1 != doc_id_expr_count) {
+          spec.max_batch_size_ = 0;
+        }
         if (OB_UNLIKELY(ddl_table_schema->get_parser_name_str().empty())) {
           ret = OB_ERR_UNEXPECTED;
         } else {

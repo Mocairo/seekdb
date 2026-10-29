@@ -39,8 +39,11 @@ public:
   void reset();
 
   int hash(uint64_t &hash_val) const;
-  const common::ObDatum &get_datum() const;
-  int from_datum(const common::ObDatum &datum);
+  const common::ObDatum &get_datum() const { return datum_; }
+  // Caller must prove pack_ == 16 and that datum_.ptr_ points to this
+  // object's inline buffer before reading the fixed-width payload.
+  const char *get_inline_fixed16_data() const { return buf_; }
+  inline int from_datum(const common::ObDatum &datum);
   int from_obj(const common::ObObj &obj);
 
   ObDocIdExt &operator=(const ObDocIdExt &other);
@@ -53,6 +56,21 @@ private:
   char buf_[OB_DOC_ID_EXT_SIZE];
   common::ObDatum datum_;
 };
+
+inline int ObDocIdExt::from_datum(const common::ObDatum &datum)
+{
+  int ret = common::OB_SUCCESS;
+  int64_t dummy_pos = 0;
+  if (!datum.is_null() && 16 == datum.len_) {
+    // Expose the usual binary document-ID width to the compiler. The bytes
+    // still belong to this value object, independently of the scan's buffer.
+    datum_ = datum;
+    MEMCPY(buf_, datum.ptr_, 16);
+    datum_.ptr_ = buf_;
+  } else if (OB_FAIL(datum_.deep_copy(datum, buf_, OB_DOC_ID_EXT_SIZE, dummy_pos))) {
+  }
+  return ret;
+}
 
 class ObDASIDRequest
 {

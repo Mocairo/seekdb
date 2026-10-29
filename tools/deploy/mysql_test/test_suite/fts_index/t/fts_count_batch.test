@@ -1,0 +1,101 @@
+# description: shared batch COUNT preserves selected rows, NULLs and grouping.
+--disable_warnings
+drop database if exists fts_count_batch;
+--enable_warnings
+create database fts_count_batch;
+use fts_count_batch;
+create table digits(n int primary key);
+insert into digits values (0),(1),(2),(3),(4),(5),(6),(7),(8),(9);
+create table docs(id int primary key, g int, h int, v int, body text,
+  fulltext index ft(body) with parser beng) charset utf8mb4;
+# 257 rows cross scalar/vector, 64-bit skip-word and 128-row batch boundaries.
+# Group keys, nullable values and MATCH membership have different periods.
+insert into docs
+select n, mod(n, 7), mod(n, 3), if(mod(n, 4) = 0, NULL, mod(n, 11)),
+  if(mod(n, 6) = 0, NULL, if(mod(n, 5) = 0, 'beta', 'alpha beta'))
+from (select a.n * 100 + b.n * 10 + c.n n from digits a, digits b, digits c) numbers
+where n < 257;
+
+# Other aggregates prevent COUNT(*) from being answered by row-count metadata.
+select /*+ opt_param('rowsets_max_rows' 0) */ count(*), count(1), count(v), count(NULL), sum(1) from docs;
+select /*+ opt_param('rowsets_max_rows' 4) */ count(*), count(1), count(v), count(NULL), sum(1) from docs;
+select /*+ opt_param('rowsets_max_rows' 64) */ count(*), count(1), count(v), count(NULL), sum(1) from docs;
+select /*+ opt_param('rowsets_max_rows' 128) */ count(*), count(1), count(v), count(NULL), sum(1) from docs;
+
+# Sparse filters leave holes within batches and a partial final batch.
+select /*+ opt_param('rowsets_max_rows' 4) */ count(*), count(1), count(v), sum(1)
+from docs where id >= 1 and id < 256 and mod(id, 5) in (1, 3);
+select /*+ opt_param('rowsets_max_rows' 128) */ count(*), count(1), count(v), sum(1)
+from docs where id >= 1 and id < 256 and mod(id, 5) in (1, 3);
+select /*+ opt_param('rowsets_max_rows' 4) */ count(*), count(1), count(v), sum(1)
+from docs where v is null;
+select /*+ opt_param('rowsets_max_rows' 128) */ count(*), count(1), count(v), sum(1)
+from docs where v is null;
+
+# Runtime-empty input retains the scalar zero/NULL result and no grouped rows.
+select /*+ opt_param('rowsets_max_rows' 4) */ count(*), count(1), count(v), sum(1)
+from docs where v = 99;
+select /*+ opt_param('rowsets_max_rows' 128) */ count(*), count(1), count(v), sum(1)
+from docs where v = 99;
+select /*+ opt_param('rowsets_max_rows' 4) */ g, count(*), count(1), count(v), sum(1)
+from docs where v = 99 group by g order by g;
+
+# Hash grouping consumes explicit selectors; merge grouping consumes slices.
+select /*+ use_hash_aggregation opt_param('rowsets_max_rows' 4) */
+  g, count(*), count(1), count(v), sum(1)
+from docs where mod(id, 5) <> 2 group by g order by g;
+select /*+ use_hash_aggregation opt_param('rowsets_max_rows' 128) */
+  g, count(*), count(1), count(v), sum(1)
+from docs where mod(id, 5) <> 2 group by g order by g;
+select /*+ no_use_hash_aggregation opt_param('rowsets_max_rows' 4) */
+  g, count(*), count(1), count(v), sum(1)
+from docs where mod(id, 5) <> 2 group by g order by g;
+select /*+ no_use_hash_aggregation opt_param('rowsets_max_rows' 128) */
+  g, count(*), count(1), count(v), sum(1)
+from docs where mod(id, 5) <> 2 group by g order by g;
+
+# Multiple DISTINCT sets coexist with ordinary COUNT cells, including NULLs.
+# Parallel execution also permits multi-stage aggregation where selected.
+select /*+ parallel(2) opt_param('rowsets_max_rows' 4) */
+  count(*), count(1), count(v), count(distinct v), count(distinct h), sum(1)
+from docs where mod(id, 5) <> 2;
+select /*+ parallel(2) opt_param('rowsets_max_rows' 128) */
+  count(*), count(1), count(v), count(distinct v), count(distinct h), sum(1)
+from docs where mod(id, 5) <> 2;
+select /*+ parallel(2) opt_param('rowsets_max_rows' 4) */
+  g, count(*), count(v), count(distinct v), count(distinct h), sum(1)
+from docs where mod(id, 5) <> 2 group by g order by g;
+select /*+ parallel(2) opt_param('rowsets_max_rows' 128) */
+  g, count(*), count(v), count(distinct v), count(distinct h), sum(1)
+from docs where mod(id, 5) <> 2 group by g order by g;
+
+# Sort outside the ROLLUP query so subtotal and grand-total output is stable.
+select * from (
+  select /*+ no_use_hash_aggregation opt_param('rowsets_max_rows' 4) */
+    g, h, count(*) star_count, count(1) one_count, count(v) value_count,
+    count(distinct v) distinct_count, sum(1) one_sum
+  from docs where mod(id, 5) <> 2 group by g, h with rollup
+) totals order by g is null, g, h is null, h;
+select * from (
+  select /*+ no_use_hash_aggregation opt_param('rowsets_max_rows' 128) */
+    g, h, count(*) star_count, count(1) one_count, count(v) value_count,
+    count(distinct v) distinct_count, sum(1) one_sum
+  from docs where mod(id, 5) <> 2 group by g, h with rollup
+) totals order by g is null, g, h is null, h;
+
+# FTS membership and an additional filter feed the same shared COUNT paths.
+select /*+ opt_param('rowsets_max_rows' 4) */ count(*), count(1), count(v), sum(1)
+from docs where match(body) against('alpha') and mod(id, 5) in (1, 3);
+select /*+ opt_param('rowsets_max_rows' 128) */ count(*), count(1), count(v), sum(1)
+from docs where match(body) against('alpha') and mod(id, 5) in (1, 3);
+select /*+ use_hash_aggregation opt_param('rowsets_max_rows' 4) */
+  g, count(*), count(1), count(v), sum(1)
+from docs where match(body) against('alpha') group by g order by g;
+select /*+ use_hash_aggregation opt_param('rowsets_max_rows' 128) */
+  g, count(*), count(1), count(v), sum(1)
+from docs where match(body) against('alpha') group by g order by g;
+select /*+ opt_param('rowsets_max_rows' 4) */ count(*), count(1), count(v), sum(1)
+from docs where match(body) against('absent');
+select /*+ opt_param('rowsets_max_rows' 128) */ count(*), count(1), count(v), sum(1)
+from docs where match(body) against('absent');
+drop database fts_count_batch;

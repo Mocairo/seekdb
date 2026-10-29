@@ -108,30 +108,6 @@ int set_borrowed_lenenc_bytes(const ObString &value, ObMySQLCellValue &out) {
   return ret;
 }
 
-int set_copied_bytes(ObIAllocator &allocator, const ObMySQLCellValueKind kind,
-                     const char *data, const int64_t len,
-                     ObMySQLCellValue &out) {
-  int ret = OB_SUCCESS;
-  if (OB_UNLIKELY(len < 0 || (len > 0 && NULL == data))) {
-    ret = OB_INVALID_ARGUMENT;
-  } else if (len <= ObMySQLCellValue::LOCAL_BUFFER_SIZE) {
-    if (len > 0) {
-      MEMCPY(out.get_local_buffer(), data, len);
-    }
-    ret = out.set_local_bytes(kind, static_cast<int32_t>(len));
-  } else {
-    char *buf = static_cast<char *>(allocator.alloc(len));
-    if (OB_ISNULL(buf)) {
-      ret = OB_ALLOCATE_MEMORY_FAILED;
-      OB_LOG(WARN, "allocate mysql cell scratch failed", K(ret), K(len));
-    } else {
-      MEMCPY(buf, data, len);
-      out.set_borrowed_bytes(kind, buf, len);
-    }
-  }
-  return ret;
-}
-
 int set_zerofill_bytes(ObIAllocator &allocator, const char *data,
                        const int64_t data_len, const bool zerofill,
                        const int32_t zflength, ObMySQLCellValue &out) {
@@ -462,18 +438,18 @@ int ObSMUtils::build_cell_value(const ObObj &obj, MYSQL_PROTOCOL_TYPE type,
       } else if (OB_UNLIKELY(value.length() < 0 || NULL == value.ptr())) {
         ret = OB_ERR_UNEXPECTED;
       } else {
-        lib::ObMemAttr mem_attr("JsonAlloc");
-        ObArenaAllocator allocator(mem_attr);
-        ObJsonBin json_bin(value.ptr(), value.length(), &allocator);
+        ObJsonBin json_bin(value.ptr(), value.length(), &scratch_allocator);
         ObIJsonBase *json_base = &json_bin;
-        ObJsonBuffer json_buf(&allocator);
+        ObJsonBuffer json_buf(&scratch_allocator);
+        ObString rendered;
         json_bin.set_seek_flag(true);
         if (OB_FAIL(json_bin.reset_iter())) {
         } else if (OB_FAIL(json_base->print(json_buf, true, value.length()))) {
+        } else if (OB_FAIL(json_buf.get_result_string(rendered))) {
         } else {
-          ret = set_copied_bytes(scratch_allocator,
-                                 ObMySQLCellValueKind::LENENC_BYTES,
-                                 json_buf.ptr(), json_buf.length(), out);
+          // The row encoder owns scratch memory until it has consumed every
+          // cell. Detach the buffer so its destructor cannot free the result.
+          ret = set_borrowed_lenenc_bytes(rendered, out);
         }
       }
       break;

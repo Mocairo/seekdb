@@ -1,0 +1,170 @@
+# description: FTS DDL batches preserve complete documents and both auxiliary tables.
+
+--disable_query_log
+connect(sys_fts_batch, $OBMYSQL_MS0, root@sys,,oceanbase, $OBMYSQL_PORT);
+connection sys_fts_batch;
+let $saved_rowsets_max_rows = query_get_value(SELECT value FROM oceanbase.__all_virtual_sys_parameter_stat WHERE name = '_rowsets_max_rows', value, 1);
+let $saved_add_fts_index = query_get_value(SELECT value FROM oceanbase.__all_virtual_sys_parameter_stat WHERE name = '_enable_add_fulltext_index_to_existing_table', value, 1);
+alter system set _enable_add_fulltext_index_to_existing_table = true;
+--disable_warnings
+drop database if exists fts_ddl_batch_boundaries;
+--enable_warnings
+create database fts_ddl_batch_boundaries;
+use fts_ddl_batch_boundaries;
+set session group_concat_max_len = 65536;
+set ob_enable_index_direct_select = on;
+
+create table digits (n int primary key);
+insert into digits values (0),(1),(2),(3),(4),(5),(6),(7),(8),(9);
+select group_concat(concat('token', lpad(a.n * 100 + b.n * 10 + c.n, 3, '0'))
+                    order by a.n, b.n, c.n separator ' ')
+into @long_body from digits a, digits b, digits c where a.n < 3;
+set @long_body = concat(@long_body, ' token000 token000 tailmark');
+
+create table scalar_docs (id int primary key, body text) charset utf8mb4;
+insert into scalar_docs values
+  (1, 'alpha alpha beta'), (2, ''), (3, NULL), (4, 'the a an or'),
+  (5, 'gamma delta epsilon zeta'), (6, @long_body), (7, 'omega tailmark'),
+  (8, ''), (9, NULL);
+create table batched_docs like scalar_docs;
+insert into batched_docs select * from scalar_docs;
+
+# A 301-term document exceeds the output capacity. Empty documents occur both
+# between populated documents and at the end of the source scan.
+alter system set _rowsets_max_rows = 0;
+create fulltext index ft on scalar_docs(body) with parser beng;
+alter system set _rowsets_max_rows = 4;
+create fulltext index ft on batched_docs(body) with parser beng;
+
+let $database_id = query_get_value(SELECT database_id FROM oceanbase.__all_database WHERE database_name = 'fts_ddl_batch_boundaries', database_id, 1);
+let $scalar_id = query_get_value(SELECT table_id FROM oceanbase.__all_table WHERE database_id = $database_id AND table_name = 'scalar_docs', table_id, 1);
+let $batched_id = query_get_value(SELECT table_id FROM oceanbase.__all_table WHERE database_id = $database_id AND table_name = 'batched_docs', table_id, 1);
+let $scalar_inverted = query_get_value(SELECT table_name FROM oceanbase.__all_table WHERE data_table_id = $scalar_id AND index_type = 13, table_name, 1);
+let $scalar_forward = query_get_value(SELECT table_name FROM oceanbase.__all_table WHERE data_table_id = $scalar_id AND index_type = 14, table_name, 1);
+let $scalar_map = query_get_value(SELECT table_name FROM oceanbase.__all_table WHERE data_table_id = $scalar_id AND index_type = 12, table_name, 1);
+let $scalar_doc = query_get_value(SELECT column_name FROM oceanbase.__all_column WHERE table_id = $scalar_id AND column_name LIKE '__doc_id_%', column_name, 1);
+let $scalar_word = query_get_value(SELECT column_name FROM oceanbase.__all_column WHERE table_id = $scalar_id AND column_name LIKE '__word_segment_%', column_name, 1);
+let $scalar_count = query_get_value(SELECT column_name FROM oceanbase.__all_column WHERE table_id = $scalar_id AND column_name LIKE '__word_count_%', column_name, 1);
+let $scalar_length = query_get_value(SELECT column_name FROM oceanbase.__all_column WHERE table_id = $scalar_id AND column_name LIKE '__doc_length_%', column_name, 1);
+let $batched_inverted = query_get_value(SELECT table_name FROM oceanbase.__all_table WHERE data_table_id = $batched_id AND index_type = 13, table_name, 1);
+let $batched_forward = query_get_value(SELECT table_name FROM oceanbase.__all_table WHERE data_table_id = $batched_id AND index_type = 14, table_name, 1);
+let $batched_map = query_get_value(SELECT table_name FROM oceanbase.__all_table WHERE data_table_id = $batched_id AND index_type = 12, table_name, 1);
+let $batched_doc = query_get_value(SELECT column_name FROM oceanbase.__all_column WHERE table_id = $batched_id AND column_name LIKE '__doc_id_%', column_name, 1);
+let $batched_word = query_get_value(SELECT column_name FROM oceanbase.__all_column WHERE table_id = $batched_id AND column_name LIKE '__word_segment_%', column_name, 1);
+let $batched_count = query_get_value(SELECT column_name FROM oceanbase.__all_column WHERE table_id = $batched_id AND column_name LIKE '__word_count_%', column_name, 1);
+let $batched_length = query_get_value(SELECT column_name FROM oceanbase.__all_column WHERE table_id = $batched_id AND column_name LIKE '__doc_length_%', column_name, 1);
+
+# The expected postings are independent of either index build and TOKENIZE.
+create table expected (
+  id int, word varchar(64), word_count int, doc_length int,
+  primary key (id, word)
+) charset utf8mb4 collate utf8mb4_bin;
+insert into expected values
+  (1, 'alpha', 2, 3), (1, 'beta', 1, 3),
+  (5, 'gamma', 1, 4), (5, 'delta', 1, 4),
+  (5, 'epsilon', 1, 4), (5, 'zeta', 1, 4),
+  (6, 'tailmark', 1, 303), (7, 'omega', 1, 2), (7, 'tailmark', 1, 2);
+insert into expected
+select 6, concat('token', lpad(a.n * 100 + b.n * 10 + c.n, 3, '0')),
+       if(a.n + b.n + c.n = 0, 3, 1), 303
+from digits a, digits b, digits c where a.n < 3;
+
+--echo # Built indexes: exact word/count/length and complete distinct postings
+# Keep direct index selects inline: CREATE VIEW prints the main table name
+# while rebuilding its definition and loses the auxiliary-table reference.
+# Left joins retain any orphan posting instead of hiding a bad document ID.
+eval select p.variant, count(*) as posting_rows, count(distinct p.id, p.word) as distinct_postings,
+       sum(e.id is null) as incorrect_postings
+from (
+  select 'scalar_inverted' as variant, m.id, p.$scalar_word as word,
+         p.$scalar_count as word_count, p.$scalar_length as doc_length
+  from $scalar_inverted p left join $scalar_map m on p.$scalar_doc = m.$scalar_doc
+  union all
+  select 'scalar_forward', m.id, p.$scalar_word, p.$scalar_count, p.$scalar_length
+  from $scalar_forward p left join $scalar_map m on p.$scalar_doc = m.$scalar_doc
+  union all
+  select 'batched_inverted', m.id, p.$batched_word, p.$batched_count, p.$batched_length
+  from $batched_inverted p left join $batched_map m on p.$batched_doc = m.$batched_doc
+  union all
+  select 'batched_forward', m.id, p.$batched_word, p.$batched_count, p.$batched_length
+  from $batched_forward p left join $batched_map m on p.$batched_doc = m.$batched_doc
+) p left join expected e
+  on p.id = e.id and p.word = e.word and p.word_count = e.word_count and p.doc_length = e.doc_length
+group by p.variant order by p.variant;
+--echo # Complete MATCH IDs with scalar and small vector query batches
+select /*+ opt_param('rowsets_max_rows' 0) */ id from scalar_docs
+where match(body) against('alpha beta token299 tailmark') order by id;
+select /*+ opt_param('rowsets_max_rows' 4) */ id from batched_docs
+where match(body) against('alpha beta token299 tailmark') order by id;
+select /*+ opt_param('rowsets_max_rows' 4) */ id from batched_docs
+where match(body) against('token000 token299' in boolean mode) order by id;
+--echo # Long document TOKENIZE preserves unique words and total frequency
+select json_length(json_extract(tokenize(@long_body, 'beng', '[{"output":"all"}]'), '$.tokens')) as distinct_words,
+       json_extract(tokenize(@long_body, 'beng', '[{"output":"all"}]'), '$.doc_len') as doc_length;
+select id, json_length(tokenize(body, 'beng')) as distinct_words,
+       json_extract(tokenize(body, 'beng', '[{"output":"all"}]'), '$.doc_len') as doc_length
+from batched_docs where id in (2, 3, 4, 8, 9) order by id;
+
+# Mutate the long document, empty/NULL documents and final populated document.
+# New rows include another long document and trailing empty/stopword documents.
+insert into scalar_docs values
+  (10, 'insertmark alpha alpha'), (11, @long_body), (12, ''), (13, NULL), (14, 'the a an or');
+insert into batched_docs values
+  (10, 'insertmark alpha alpha'), (11, @long_body), (12, ''), (13, NULL), (14, 'the a an or');
+update scalar_docs set body = 'updatemark beta beta' where id = 1;
+update batched_docs set body = 'updatemark beta beta' where id = 1;
+update scalar_docs set body = 'emptychanged alpha' where id = 2;
+update batched_docs set body = 'emptychanged alpha' where id = 2;
+update scalar_docs set body = 'nullchanged beta' where id = 3;
+update batched_docs set body = 'nullchanged beta' where id = 3;
+update scalar_docs set body = '' where id = 4;
+update batched_docs set body = '' where id = 4;
+update scalar_docs set body = NULL where id = 6;
+update batched_docs set body = NULL where id = 6;
+delete from scalar_docs where id in (5, 7);
+delete from batched_docs where id in (5, 7);
+delete from expected;
+insert into expected values
+  (1, 'updatemark', 1, 3), (1, 'beta', 2, 3),
+  (2, 'emptychanged', 1, 2), (2, 'alpha', 1, 2),
+  (3, 'nullchanged', 1, 2), (3, 'beta', 1, 2),
+  (10, 'insertmark', 1, 3), (10, 'alpha', 2, 3), (11, 'tailmark', 1, 303);
+insert into expected
+select 11, concat('token', lpad(a.n * 100 + b.n * 10 + c.n, 3, '0')),
+       if(a.n + b.n + c.n = 0, 3, 1), 303
+from digits a, digits b, digits c where a.n < 3;
+
+--echo # After INSERT/UPDATE/DELETE: both auxiliary orientations match exact expected postings
+eval select p.variant, count(*) as posting_rows, count(distinct p.id, p.word) as distinct_postings,
+       sum(e.id is null) as incorrect_postings
+from (
+  select 'scalar_inverted' as variant, m.id, p.$scalar_word as word,
+         p.$scalar_count as word_count, p.$scalar_length as doc_length
+  from $scalar_inverted p left join $scalar_map m on p.$scalar_doc = m.$scalar_doc
+  union all
+  select 'scalar_forward', m.id, p.$scalar_word, p.$scalar_count, p.$scalar_length
+  from $scalar_forward p left join $scalar_map m on p.$scalar_doc = m.$scalar_doc
+  union all
+  select 'batched_inverted', m.id, p.$batched_word, p.$batched_count, p.$batched_length
+  from $batched_inverted p left join $batched_map m on p.$batched_doc = m.$batched_doc
+  union all
+  select 'batched_forward', m.id, p.$batched_word, p.$batched_count, p.$batched_length
+  from $batched_forward p left join $batched_map m on p.$batched_doc = m.$batched_doc
+) p left join expected e
+  on p.id = e.id and p.word = e.word and p.word_count = e.word_count and p.doc_length = e.doc_length
+group by p.variant order by p.variant;
+select /*+ opt_param('rowsets_max_rows' 0) */ id from scalar_docs
+where match(body) against('alpha beta token299 tailmark') order by id;
+select /*+ opt_param('rowsets_max_rows' 4) */ id from batched_docs
+where match(body) against('alpha beta token299 tailmark') order by id;
+select /*+ opt_param('rowsets_max_rows' 4) */ id from batched_docs
+where match(body) against('updatemark insertmark') order by id;
+select /*+ opt_param('rowsets_max_rows' 4) */ id from batched_docs
+where match(body) against('gamma omega') order by id;
+
+eval alter system set _rowsets_max_rows = $saved_rowsets_max_rows;
+eval alter system set _enable_add_fulltext_index_to_existing_table = $saved_add_fts_index;
+drop database fts_ddl_batch_boundaries;
+connection default;
+disconnect sys_fts_batch;
+--enable_query_log

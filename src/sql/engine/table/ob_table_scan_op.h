@@ -702,6 +702,7 @@ private:
   int inner_rescan_for_tsc();
 
   int inner_get_next_fts_index_row();
+  int inner_get_next_fts_index_batch(const int64_t max_row_cnt);
   int fetch_next_fts_index_rows();
   int fill_generated_fts_cols(blocksstable::ObDatumRow *row);
   int get_output_fts_col_expr_by_type(const ObExprOperatorType &type, ObExpr *&expr);
@@ -735,6 +736,8 @@ protected:
   bool in_rescan_;
   ObDomainIndexCache domain_index_;
   ObFTIndexRowCache fts_index_;
+  // WORD_SEGMENT, DOC_ID, WORD_COUNT, DOC_LENGTH from the immutable scan spec.
+  ObExpr *fts_output_exprs_[4];
 
   // output_ is used to output data, TSC operator directly invokes output_::get_next_row(s),
   // it points to fold_iter_ in group rescan and iter_tree_ in normal scan.

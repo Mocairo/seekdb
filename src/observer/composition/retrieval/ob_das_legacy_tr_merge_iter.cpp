@@ -380,10 +380,17 @@ int ObDASLegacyTRMergeIter::create_sparse_retrieval_iter()
   sr_iter_param_.id_proj_expr_ = ir_ctdef_->inv_scan_domain_id_col_;
   sr_iter_param_.relevance_expr_ = ir_ctdef_->relevance_expr_;
   sr_iter_param_.relevance_proj_expr_ = ir_ctdef_->relevance_proj_col_;
-  // The pushed match filter is evaluated from the projected relevance score, so
-  // it can only run when relevance is calculated. Without relevance the scan
-  // ranges and DAAT should-match logic already produce the matching docs.
-  sr_iter_param_.filter_expr_ = ir_ctdef_->need_calc_relevance() ? ir_ctdef_->match_filter_ : nullptr;
+  sr_iter_param_.filter_expr_ = ir_ctdef_->match_filter_;
+  if (!ir_ctdef_->need_calc_relevance() && NATURAL_LANGUAGE_MODE == ir_ctdef_->mode_flag_
+      && OB_ISNULL(ir_ctdef_->field_boost_expr_) && OB_NOT_NULL(sr_iter_param_.filter_expr_)
+      && OB_NOT_NULL(sr_iter_param_.relevance_proj_expr_)
+      && T_OP_BOOL == sr_iter_param_.filter_expr_->type_
+      && 1 == sr_iter_param_.filter_expr_->arg_cnt_
+      && sr_iter_param_.filter_expr_->args_[0] == sr_iter_param_.relevance_proj_expr_) {
+    // The optimizer proved that this MATCH is used only as a truth predicate.
+    // Every merged posting has positive relevance, so membership satisfies it.
+    sr_iter_param_.filter_expr_ = nullptr;
+  }
   sr_iter_param_.topk_limit_ = topk_limit_;
   if (OB_NOT_NULL(ir_ctdef_->field_boost_expr_)) {
     ObDatum *boost_datum = nullptr;
@@ -471,13 +478,22 @@ int ObDASLegacyTRMergeIter::create_sparse_retrieval_iter()
 int ObDASLegacyTRMergeIter::init_daat_iter_param(ObTextDaaTParam &iter_param)
 {
   int ret = OB_SUCCESS;
-  const bool need_relevance = ir_ctdef_->need_calc_relevance();
   iter_param.dim_iters_ = &dim_iters_;
   iter_param.base_param_ = &sr_iter_param_;
   iter_param.allocator_ = &myself_allocator_;
   iter_param.mode_flag_ = ir_ctdef_->mode_flag_;
   iter_param.function_lookup_mode_ = function_lookup_mode_;
-  if (need_relevance) {
+  // Only the optimizer-proven truth predicate can replace scoring with an
+  // ordered union. Boolean, boosted, ranked and function-lookup paths keep
+  // their collectors and merge implementation.
+  iter_param.membership_only_ = daat_mode_ && !topk_mode_ && !function_lookup_mode_
+      && !ir_ctdef_->need_calc_relevance()
+      && NATURAL_LANGUAGE_MODE == ir_ctdef_->mode_flag_
+      && OB_ISNULL(ir_ctdef_->field_boost_expr_)
+      && dim_weights_.empty()
+      && ir_rtdef_->minimum_should_match_ <= 1
+      && OB_ISNULL(sr_iter_param_.filter_expr_);
+  if (ir_ctdef_->need_calc_relevance()) {
     iter_param.bm25_param_est_ctx_.total_doc_cnt_expr_
         = ir_ctdef_->get_doc_agg_ctdef()->pd_expr_spec_.pd_storage_aggregate_output_.at(0);
     iter_param.bm25_param_est_ctx_.estimated_total_doc_cnt_ = ir_ctdef_->estimated_total_doc_cnt_;
@@ -485,18 +501,18 @@ int ObDASLegacyTRMergeIter::init_daat_iter_param(ObTextDaaTParam &iter_param)
     iter_param.bm25_param_est_ctx_.can_est_by_sum_skip_index_ = ir_ctdef_->avg_doc_len_est_spec_.can_est_by_sum_skip_index_;
     iter_param.bm25_param_est_ctx_.avg_doc_token_cnt_expr_ = ir_ctdef_->avg_doc_token_cnt_expr_;
     iter_param.bm25_param_est_ctx_.doc_length_est_param_ = &doc_length_est_param_;
-  }
-  if (query_tokens_.count() == 0) {
-    // do nothing
-  } else if (need_relevance && OB_ISNULL(iter_param.bm25_param_est_ctx_.total_doc_cnt_expr_)) {
-    ret = OB_ERR_UNEXPECTED;
-  } else if (need_relevance && OB_FAIL(init_doc_length_est_param())) {
-  } else if (need_relevance && !ir_ctdef_->need_estimate_total_doc_cnt()) {
-    if (OB_UNLIKELY(!static_cast<sql::ObStoragePushdownFlag>(total_doc_cnt_scan_param_->pd_storage_flag_).is_aggregate_pushdown())) {
-      ret = OB_NOT_IMPLEMENT;
-      LOG_ERROR("aggregate without pushdown not implemented", K(ret));
-    } else {
-      iter_param.bm25_param_est_ctx_.total_doc_cnt_iter_ = static_cast<sql::ObDASScanIter*>(children_[children_cnt_ - 1]);
+    if (query_tokens_.count() == 0) {
+      // do nothing
+    } else if (OB_ISNULL(iter_param.bm25_param_est_ctx_.total_doc_cnt_expr_)) {
+      ret = OB_ERR_UNEXPECTED;
+    } else if (OB_FAIL(init_doc_length_est_param())) {
+    } else if (!ir_ctdef_->need_estimate_total_doc_cnt()) {
+      if (OB_UNLIKELY(!static_cast<sql::ObStoragePushdownFlag>(total_doc_cnt_scan_param_->pd_storage_flag_).is_aggregate_pushdown())) {
+        ret = OB_NOT_IMPLEMENT;
+        LOG_ERROR("aggregate without pushdown not implemented", K(ret));
+      } else {
+        iter_param.bm25_param_est_ctx_.total_doc_cnt_iter_ = static_cast<sql::ObDASScanIter*>(children_[children_cnt_ - 1]);
+      }
     }
   }
   if (OB_SUCC(ret)) {
@@ -528,29 +544,28 @@ int ObDASLegacyTRMergeIter::init_taat_iter_param(ObTextTaaTParam &iter_param)
   iter_param.query_tokens_ = &query_tokens_;
   iter_param.base_param_ = &sr_iter_param_;
   iter_param.allocator_ = &myself_allocator_;
-  const bool need_relevance = ir_ctdef_->need_calc_relevance();
   iter_param.mode_flag_ = ir_ctdef_->mode_flag_;
   iter_param.function_lookup_mode_ = function_lookup_mode_;
-  if (need_relevance) {
+  iter_param.bm25_param_est_ctx_.estimated_total_doc_cnt_ = ir_ctdef_->estimated_total_doc_cnt_;
+  if (OB_ISNULL(iter_param.dim_iter_ = dim_iter_)) {
+    ret = OB_ERR_UNEXPECTED;
+  } else if (ir_ctdef_->need_calc_relevance()) {
     iter_param.bm25_param_est_ctx_.total_doc_cnt_expr_
         = ir_ctdef_->get_doc_agg_ctdef()->pd_expr_spec_.pd_storage_aggregate_output_.at(0);
-    iter_param.bm25_param_est_ctx_.estimated_total_doc_cnt_ = ir_ctdef_->estimated_total_doc_cnt_;
     iter_param.bm25_param_est_ctx_.need_est_avg_doc_token_cnt_ = ir_ctdef_->need_avg_doc_len_est();
     iter_param.bm25_param_est_ctx_.can_est_by_sum_skip_index_ = ir_ctdef_->avg_doc_len_est_spec_.can_est_by_sum_skip_index_;
     iter_param.bm25_param_est_ctx_.avg_doc_token_cnt_expr_ = ir_ctdef_->avg_doc_token_cnt_expr_;
     iter_param.bm25_param_est_ctx_.doc_length_est_param_ = &doc_length_est_param_;
-  }
-  if (OB_ISNULL(iter_param.dim_iter_ = dim_iter_)) {
-    ret = OB_ERR_UNEXPECTED;
-  } else if (need_relevance && OB_ISNULL(iter_param.bm25_param_est_ctx_.total_doc_cnt_expr_)) {
-    ret = OB_ERR_UNEXPECTED;
-  } else if (need_relevance && OB_FAIL(init_doc_length_est_param())) {
-  } else if (need_relevance && !ir_ctdef_->need_estimate_total_doc_cnt()) {
-    if (OB_UNLIKELY(!static_cast<sql::ObStoragePushdownFlag>(total_doc_cnt_scan_param_->pd_storage_flag_).is_aggregate_pushdown())) {
-      ret = OB_NOT_IMPLEMENT;
-      LOG_ERROR("aggregate without pushdown not implemented", K(ret));
-    } else {
-      iter_param.bm25_param_est_ctx_.total_doc_cnt_iter_ = static_cast<sql::ObDASScanIter*>(children_[children_cnt_ - 1]);
+    if (OB_ISNULL(iter_param.bm25_param_est_ctx_.total_doc_cnt_expr_)) {
+      ret = OB_ERR_UNEXPECTED;
+    } else if (OB_FAIL(init_doc_length_est_param())) {
+    } else if (!ir_ctdef_->need_estimate_total_doc_cnt()) {
+      if (OB_UNLIKELY(!static_cast<sql::ObStoragePushdownFlag>(total_doc_cnt_scan_param_->pd_storage_flag_).is_aggregate_pushdown())) {
+        ret = OB_NOT_IMPLEMENT;
+        LOG_ERROR("aggregate without pushdown not implemented", K(ret));
+      } else {
+        iter_param.bm25_param_est_ctx_.total_doc_cnt_iter_ = static_cast<sql::ObDASScanIter*>(children_[children_cnt_ - 1]);
+      }
     }
   }
   return ret;
@@ -1120,7 +1135,7 @@ int ObDASLegacyTRMergeIter::build_query_tokens(const ObDASIRScanCtDef *ir_ctdef,
     int64_t doc_length = 0;
     storage::ObFTParseHelper tokenize_helper;
     common::ObSEArray<ObFTWord, 16> tokens;
-    hash::ObHashMap<ObFTWord, int64_t> token_map;
+    storage::ObFTWordMap token_map;
     const int64_t ft_word_bkt_cnt = MAX(search_text_string.length() / 10, 2);
     if (OB_FAIL(tokenize_helper.init(&alloc, parser_name, parser_properties))) {
     } else if (OB_FAIL(token_map.create(ft_word_bkt_cnt, common::ObMemAttr("FTWordMap")))) {
@@ -1131,7 +1146,7 @@ int ObDASLegacyTRMergeIter::build_query_tokens(const ObDASIRScanCtDef *ir_ctdef,
                            doc_length,
                            token_map))) {
     } else {
-      for (hash::ObHashMap<ObFTWord, int64_t>::const_iterator iter = token_map.begin();
+      for (storage::ObFTWordMap::const_iterator iter = token_map.begin();
           OB_SUCC(ret) && iter != token_map.end();
           ++iter) {
         const ObFTWord &token = iter->first;

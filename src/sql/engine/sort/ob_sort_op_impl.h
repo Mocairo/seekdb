@@ -474,6 +474,9 @@ public:
     int ret_;
     const ObIArray<ObSortFieldCollation> *sort_collations_;
     const ObIArray<ObSortCmpFunc> *sort_cmp_funs_;
+    // The plan arrays (or fixed prefix-sort slices) stay unchanged until reset().
+    const ObSortFieldCollation *collation_data_;
+    const ObSortCmpFunc *cmp_func_data_;
     ObExecContext *exec_ctx_;
     const common::ObDatumAccessContext *access_ctx_;
     bool enable_encode_sortkey_;

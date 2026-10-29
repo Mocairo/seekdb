@@ -1,0 +1,243 @@
+drop database if exists fts_ranked_batch_seek;
+create database fts_ranked_batch_seek;
+use fts_ranked_batch_seek;
+create table digits(n int primary key);
+insert into digits values (0),(1),(2),(3),(4),(5),(6),(7),(8),(9);
+create table docs(id bigint primary key, body text,
+fulltext index ft(body) with parser beng) charset utf8mb4;
+insert into docs
+select n + 1, concat(repeat('alpha ', 1 + mod(n, 7)),
+if(mod(n, 11) = 0, repeat('beta ', 1 + mod(n, 13)), ''),
+if(mod(n, 37) = 0, repeat('gamma ', 1 + mod(n, 17)), ''),
+repeat('filler ', 1 + mod(n, 103)))
+from (select a.n * 100 + b.n * 10 + c.n n from digits a, digits b, digits c) numbers;
+select /*+ opt_param('rowsets_max_rows' 4) */ id,
+round(match(body) against('alpha beta gamma'), 8) score
+from docs where match(body) against('alpha beta gamma') order by score desc, id limit 37;
+id	score
+1	8.05322195
+815	6.91254071
+519	6.83352998
+112	6.54330574
+408	6.27900250
+741	6.08145491
+334	6.00470644
+963	5.62350286
+556	5.57218441
+149	5.51411925
+371	5.25482761
+778	5.19884636
+593	5.02431466
+186	5.02152017
+1000	5.02084444
+518	4.63247842
+727	4.58295329
+936	4.53131320
+826	4.48706668
+12	4.41399781
+221	4.36583205
+111	4.25134855
+320	4.23281875
+529	4.20343409
+738	4.16147943
+947	4.10337868
+441	3.97928433
+650	3.97443904
+23	3.95828338
+38	3.94469347
+232	3.89211346
+837	3.82038939
+75	3.80240345
+223	3.79955840
+628	3.75497443
+260	3.71102655
+958	3.69941110
+select /*+ opt_param('rowsets_max_rows' 128) */ id,
+round(match(body) against('alpha beta gamma'), 8) score
+from docs where match(body) against('alpha beta gamma') order by score desc, id limit 37;
+id	score
+1	8.05322195
+815	6.91254071
+519	6.83352998
+112	6.54330574
+408	6.27900250
+741	6.08145491
+334	6.00470644
+963	5.62350286
+556	5.57218441
+149	5.51411925
+371	5.25482761
+778	5.19884636
+593	5.02431466
+186	5.02152017
+1000	5.02084444
+518	4.63247842
+727	4.58295329
+936	4.53131320
+826	4.48706668
+12	4.41399781
+221	4.36583205
+111	4.25134855
+320	4.23281875
+529	4.20343409
+738	4.16147943
+947	4.10337868
+441	3.97928433
+650	3.97443904
+23	3.95828338
+38	3.94469347
+232	3.89211346
+837	3.82038939
+75	3.80240345
+223	3.79955840
+628	3.75497443
+260	3.71102655
+958	3.69941110
+select /*+ opt_param('rowsets_max_rows' 4) */ id,
+round(match(body) against('alpha beta gamma'), 8) score
+from docs where match(body) against('alpha beta gamma') order by score desc, id limit 17 offset 19;
+id	score
+12	4.41399781
+221	4.36583205
+111	4.25134855
+320	4.23281875
+529	4.20343409
+738	4.16147943
+947	4.10337868
+441	3.97928433
+650	3.97443904
+23	3.95828338
+38	3.94469347
+232	3.89211346
+837	3.82038939
+75	3.80240345
+223	3.79955840
+628	3.75497443
+260	3.71102655
+select id, round(score, 8) score from (
+select /*+ opt_param('rowsets_max_rows' 4) */ id,
+match(body) against('alpha beta gamma') score
+from docs where match(body) against('alpha beta gamma') limit 20
+) ranked order by id;
+id	score
+1	8.05322195
+12	4.41399781
+112	6.54330574
+149	5.51411925
+186	5.02152017
+334	6.00470644
+371	5.25482761
+408	6.27900250
+518	4.63247842
+519	6.83352998
+556	5.57218441
+593	5.02431466
+727	4.58295329
+741	6.08145491
+778	5.19884636
+815	6.91254071
+826	4.48706668
+936	4.53131320
+963	5.62350286
+1000	5.02084444
+select id, round(score, 8) score from (
+select /*+ opt_param('rowsets_max_rows' 128) */ id,
+match(body) against('alpha beta gamma') score
+from docs where match(body) against('alpha beta gamma') limit 20
+) ranked order by id;
+id	score
+1	8.05322195
+12	4.41399781
+112	6.54330574
+149	5.51411925
+186	5.02152017
+334	6.00470644
+371	5.25482761
+408	6.27900250
+518	4.63247842
+519	6.83352998
+556	5.57218441
+593	5.02431466
+727	4.58295329
+741	6.08145491
+778	5.19884636
+815	6.91254071
+826	4.48706668
+936	4.53131320
+963	5.62350286
+1000	5.02084444
+prepare ranked_sql from 'select id, round(score, 8) score from (select id, match(body) against(?) score from docs where match(body) against(?) limit 20) ranked order by id';
+set @query = 'alpha beta gamma';
+execute ranked_sql using @query, @query;
+id	score
+1	8.05322195
+12	4.41399781
+112	6.54330574
+149	5.51411925
+186	5.02152017
+334	6.00470644
+371	5.25482761
+408	6.27900250
+518	4.63247842
+519	6.83352998
+556	5.57218441
+593	5.02431466
+727	4.58295329
+741	6.08145491
+778	5.19884636
+815	6.91254071
+826	4.48706668
+936	4.53131320
+963	5.62350286
+1000	5.02084444
+set @query = 'beta gamma absent';
+execute ranked_sql using @query, @query;
+id	score
+1	7.72189664
+12	4.06633662
+112	6.14392814
+149	5.37291257
+186	4.85939784
+221	4.05942536
+334	5.69881100
+371	4.99416410
+408	6.19672875
+518	4.21354479
+519	6.61868623
+556	5.37434268
+593	4.82955546
+727	4.19288237
+741	5.73554296
+778	5.12732490
+815	6.79699449
+936	4.17555641
+963	5.37603379
+1000	4.79589556
+set @query = 'absent';
+execute ranked_sql using @query, @query;
+id	score
+set @query = 'alpha beta gamma';
+execute ranked_sql using @query, @query;
+id	score
+1	8.05322195
+12	4.41399781
+112	6.54330574
+149	5.51411925
+186	5.02152017
+334	6.00470644
+371	5.25482761
+408	6.27900250
+518	4.63247842
+519	6.83352998
+556	5.57218441
+593	5.02431466
+727	4.58295329
+741	6.08145491
+778	5.19884636
+815	6.91254071
+826	4.48706668
+936	4.53131320
+963	5.62350286
+1000	5.02084444
+deallocate prepare ranked_sql;
+drop database fts_ranked_batch_seek;

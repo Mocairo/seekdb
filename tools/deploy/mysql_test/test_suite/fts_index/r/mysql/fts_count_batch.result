@@ -1,0 +1,238 @@
+drop database if exists fts_count_batch;
+create database fts_count_batch;
+use fts_count_batch;
+create table digits(n int primary key);
+insert into digits values (0),(1),(2),(3),(4),(5),(6),(7),(8),(9);
+create table docs(id int primary key, g int, h int, v int, body text,
+fulltext index ft(body) with parser beng) charset utf8mb4;
+insert into docs
+select n, mod(n, 7), mod(n, 3), if(mod(n, 4) = 0, NULL, mod(n, 11)),
+if(mod(n, 6) = 0, NULL, if(mod(n, 5) = 0, 'beta', 'alpha beta'))
+from (select a.n * 100 + b.n * 10 + c.n n from digits a, digits b, digits c) numbers
+where n < 257;
+select /*+ opt_param('rowsets_max_rows' 0) */ count(*), count(1), count(v), count(NULL), sum(1) from docs;
+count(*)	count(1)	count(v)	count(NULL)	sum(1)
+257	257	192	0	257
+select /*+ opt_param('rowsets_max_rows' 4) */ count(*), count(1), count(v), count(NULL), sum(1) from docs;
+count(*)	count(1)	count(v)	count(NULL)	sum(1)
+257	257	192	0	257
+select /*+ opt_param('rowsets_max_rows' 64) */ count(*), count(1), count(v), count(NULL), sum(1) from docs;
+count(*)	count(1)	count(v)	count(NULL)	sum(1)
+257	257	192	0	257
+select /*+ opt_param('rowsets_max_rows' 128) */ count(*), count(1), count(v), count(NULL), sum(1) from docs;
+count(*)	count(1)	count(v)	count(NULL)	sum(1)
+257	257	192	0	257
+select /*+ opt_param('rowsets_max_rows' 4) */ count(*), count(1), count(v), sum(1)
+from docs where id >= 1 and id < 256 and mod(id, 5) in (1, 3);
+count(*)	count(1)	count(v)	sum(1)
+102	102	77	102
+select /*+ opt_param('rowsets_max_rows' 128) */ count(*), count(1), count(v), sum(1)
+from docs where id >= 1 and id < 256 and mod(id, 5) in (1, 3);
+count(*)	count(1)	count(v)	sum(1)
+102	102	77	102
+select /*+ opt_param('rowsets_max_rows' 4) */ count(*), count(1), count(v), sum(1)
+from docs where v is null;
+count(*)	count(1)	count(v)	sum(1)
+65	65	0	65
+select /*+ opt_param('rowsets_max_rows' 128) */ count(*), count(1), count(v), sum(1)
+from docs where v is null;
+count(*)	count(1)	count(v)	sum(1)
+65	65	0	65
+select /*+ opt_param('rowsets_max_rows' 4) */ count(*), count(1), count(v), sum(1)
+from docs where v = 99;
+count(*)	count(1)	count(v)	sum(1)
+0	0	0	NULL
+select /*+ opt_param('rowsets_max_rows' 128) */ count(*), count(1), count(v), sum(1)
+from docs where v = 99;
+count(*)	count(1)	count(v)	sum(1)
+0	0	0	NULL
+select /*+ opt_param('rowsets_max_rows' 4) */ g, count(*), count(1), count(v), sum(1)
+from docs where v = 99 group by g order by g;
+g	count(*)	count(1)	count(v)	sum(1)
+select /*+ use_hash_aggregation opt_param('rowsets_max_rows' 4) */
+g, count(*), count(1), count(v), sum(1)
+from docs where mod(id, 5) <> 2 group by g order by g;
+g	count(*)	count(1)	count(v)	sum(1)
+0	29	29	21	29
+1	30	30	23	30
+2	29	29	22	29
+3	30	30	23	30
+4	30	30	22	30
+5	29	29	22	29
+6	29	29	21	29
+select /*+ use_hash_aggregation opt_param('rowsets_max_rows' 128) */
+g, count(*), count(1), count(v), sum(1)
+from docs where mod(id, 5) <> 2 group by g order by g;
+g	count(*)	count(1)	count(v)	sum(1)
+0	29	29	21	29
+1	30	30	23	30
+2	29	29	22	29
+3	30	30	23	30
+4	30	30	22	30
+5	29	29	22	29
+6	29	29	21	29
+select /*+ no_use_hash_aggregation opt_param('rowsets_max_rows' 4) */
+g, count(*), count(1), count(v), sum(1)
+from docs where mod(id, 5) <> 2 group by g order by g;
+g	count(*)	count(1)	count(v)	sum(1)
+0	29	29	21	29
+1	30	30	23	30
+2	29	29	22	29
+3	30	30	23	30
+4	30	30	22	30
+5	29	29	22	29
+6	29	29	21	29
+select /*+ no_use_hash_aggregation opt_param('rowsets_max_rows' 128) */
+g, count(*), count(1), count(v), sum(1)
+from docs where mod(id, 5) <> 2 group by g order by g;
+g	count(*)	count(1)	count(v)	sum(1)
+0	29	29	21	29
+1	30	30	23	30
+2	29	29	22	29
+3	30	30	23	30
+4	30	30	22	30
+5	29	29	22	29
+6	29	29	21	29
+select /*+ parallel(2) opt_param('rowsets_max_rows' 4) */
+count(*), count(1), count(v), count(distinct v), count(distinct h), sum(1)
+from docs where mod(id, 5) <> 2;
+count(*)	count(1)	count(v)	count(distinct v)	count(distinct h)	sum(1)
+206	206	154	11	3	206
+select /*+ parallel(2) opt_param('rowsets_max_rows' 128) */
+count(*), count(1), count(v), count(distinct v), count(distinct h), sum(1)
+from docs where mod(id, 5) <> 2;
+count(*)	count(1)	count(v)	count(distinct v)	count(distinct h)	sum(1)
+206	206	154	11	3	206
+select /*+ parallel(2) opt_param('rowsets_max_rows' 4) */
+g, count(*), count(v), count(distinct v), count(distinct h), sum(1)
+from docs where mod(id, 5) <> 2 group by g order by g;
+g	count(*)	count(v)	count(distinct v)	count(distinct h)	sum(1)
+0	29	21	11	3	29
+1	30	23	11	3	30
+2	29	22	11	3	29
+3	30	23	11	3	30
+4	30	22	11	3	30
+5	29	22	11	3	29
+6	29	21	11	3	29
+select /*+ parallel(2) opt_param('rowsets_max_rows' 128) */
+g, count(*), count(v), count(distinct v), count(distinct h), sum(1)
+from docs where mod(id, 5) <> 2 group by g order by g;
+g	count(*)	count(v)	count(distinct v)	count(distinct h)	sum(1)
+0	29	21	11	3	29
+1	30	23	11	3	30
+2	29	22	11	3	29
+3	30	23	11	3	30
+4	30	22	11	3	30
+5	29	22	11	3	29
+6	29	21	11	3	29
+select * from (
+select /*+ no_use_hash_aggregation opt_param('rowsets_max_rows' 4) */
+g, h, count(*) star_count, count(1) one_count, count(v) value_count,
+count(distinct v) distinct_count, sum(1) one_sum
+from docs where mod(id, 5) <> 2 group by g, h with rollup
+) totals order by g is null, g, h is null, h;
+g	h	star_count	one_count	value_count	distinct_count	one_sum
+0	0	10	10	7	7	10
+0	1	9	9	7	7	9
+0	2	10	10	7	6	10
+0	NULL	29	29	21	11	29
+1	0	10	10	7	6	10
+1	1	10	10	8	8	10
+1	2	10	10	8	8	10
+1	NULL	30	30	23	11	30
+2	0	10	10	8	8	10
+2	1	9	9	6	6	9
+2	2	10	10	8	7	10
+2	NULL	29	29	22	11	29
+3	0	11	11	9	8	11
+3	1	10	10	8	7	10
+3	2	9	9	6	6	9
+3	NULL	30	30	23	11	30
+4	0	10	10	7	6	10
+4	1	11	11	8	8	11
+4	2	9	9	7	7	9
+4	NULL	30	30	22	11	30
+5	0	9	9	7	7	9
+5	1	10	10	7	6	10
+5	2	10	10	8	8	10
+5	NULL	29	29	22	11	29
+6	0	9	9	7	7	9
+6	1	10	10	7	7	10
+6	2	10	10	7	7	10
+6	NULL	29	29	21	11	29
+NULL	NULL	206	206	154	11	206
+select * from (
+select /*+ no_use_hash_aggregation opt_param('rowsets_max_rows' 128) */
+g, h, count(*) star_count, count(1) one_count, count(v) value_count,
+count(distinct v) distinct_count, sum(1) one_sum
+from docs where mod(id, 5) <> 2 group by g, h with rollup
+) totals order by g is null, g, h is null, h;
+g	h	star_count	one_count	value_count	distinct_count	one_sum
+0	0	10	10	7	7	10
+0	1	9	9	7	7	9
+0	2	10	10	7	6	10
+0	NULL	29	29	21	11	29
+1	0	10	10	7	6	10
+1	1	10	10	8	8	10
+1	2	10	10	8	8	10
+1	NULL	30	30	23	11	30
+2	0	10	10	8	8	10
+2	1	9	9	6	6	9
+2	2	10	10	8	7	10
+2	NULL	29	29	22	11	29
+3	0	11	11	9	8	11
+3	1	10	10	8	7	10
+3	2	9	9	6	6	9
+3	NULL	30	30	23	11	30
+4	0	10	10	7	6	10
+4	1	11	11	8	8	11
+4	2	9	9	7	7	9
+4	NULL	30	30	22	11	30
+5	0	9	9	7	7	9
+5	1	10	10	7	6	10
+5	2	10	10	8	8	10
+5	NULL	29	29	22	11	29
+6	0	9	9	7	7	9
+6	1	10	10	7	7	10
+6	2	10	10	7	7	10
+6	NULL	29	29	21	11	29
+NULL	NULL	206	206	154	11	206
+select /*+ opt_param('rowsets_max_rows' 4) */ count(*), count(1), count(v), sum(1)
+from docs where match(body) against('alpha') and mod(id, 5) in (1, 3);
+count(*)	count(1)	count(v)	sum(1)
+86	86	68	86
+select /*+ opt_param('rowsets_max_rows' 128) */ count(*), count(1), count(v), sum(1)
+from docs where match(body) against('alpha') and mod(id, 5) in (1, 3);
+count(*)	count(1)	count(v)	sum(1)
+86	86	68	86
+select /*+ use_hash_aggregation opt_param('rowsets_max_rows' 4) */
+g, count(*), count(1), count(v), sum(1)
+from docs where match(body) against('alpha') group by g order by g;
+g	count(*)	count(1)	count(v)	sum(1)
+0	24	24	19	24
+1	25	25	19	25
+2	26	26	21	26
+3	24	24	20	24
+4	25	25	19	25
+5	23	23	18	23
+6	24	24	20	24
+select /*+ use_hash_aggregation opt_param('rowsets_max_rows' 128) */
+g, count(*), count(1), count(v), sum(1)
+from docs where match(body) against('alpha') group by g order by g;
+g	count(*)	count(1)	count(v)	sum(1)
+0	24	24	19	24
+1	25	25	19	25
+2	26	26	21	26
+3	24	24	20	24
+4	25	25	19	25
+5	23	23	18	23
+6	24	24	20	24
+select /*+ opt_param('rowsets_max_rows' 4) */ count(*), count(1), count(v), sum(1)
+from docs where match(body) against('absent');
+count(*)	count(1)	count(v)	sum(1)
+0	0	0	NULL
+select /*+ opt_param('rowsets_max_rows' 128) */ count(*), count(1), count(v), sum(1)
+from docs where match(body) against('absent');
+count(*)	count(1)	count(v)	sum(1)
+0	0	0	NULL
+drop database fts_count_batch;

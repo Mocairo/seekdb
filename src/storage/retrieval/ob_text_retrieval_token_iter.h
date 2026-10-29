@@ -119,8 +119,58 @@ private:
   DISALLOW_COPY_AND_ASSIGN(ObTextRetrievalTokenIter);
 };
 
+// Find the first cached posting at or after a target. The array is ordered by
+// cmp_func and remains borrowed for the duration of this call.
+OB_INLINE int find_cached_text_doc_id(
+    const ObDocIdExt *doc_ids, const int64_t count, const int64_t begin,
+    const common::ObDatumCmpFuncType cmp_func, const ObDatum &id_datum, int64_t &position)
+{
+  int ret = OB_SUCCESS;
+  int64_t low = begin;
+  int64_t high = count;
+  int cmp_ret = 0;
+  if (OB_UNLIKELY(low < 0 || low > count)) {
+    ret = OB_ERR_UNEXPECTED;
+  } else if (low < count
+             && OB_FAIL(cmp_func(id_datum, doc_ids[low].get_datum(), cmp_ret, nullptr))) {
+  } else if (low == count || cmp_ret <= 0) {
+    // Repeated pivots and the current posting need only one comparison.
+  } else {
+    ++low;
+    int64_t step = 1;
+    // Keep adjacent advances cheap, while bounding the search for distant
+    // pivots. Every posting in a token's cached batch is ordered by doc ID.
+    while (OB_SUCC(ret) && low < count) {
+      const int64_t probe = low + MIN(step, count - low) - 1;
+      if (OB_FAIL(cmp_func(id_datum, doc_ids[probe].get_datum(), cmp_ret, nullptr))) {
+      } else if (cmp_ret <= 0) {
+        high = probe;
+        break;
+      } else {
+        low = probe + 1;
+        const int64_t remaining = count - low;
+        step = step <= remaining / 2 ? step * 2 : remaining;
+      }
+    }
+    while (OB_SUCC(ret) && low < high) {
+      const int64_t mid = low + (high - low) / 2;
+      if (OB_FAIL(cmp_func(id_datum, doc_ids[mid].get_datum(), cmp_ret, nullptr))) {
+      } else if (cmp_ret <= 0) {
+        high = mid;
+      } else {
+        low = mid + 1;
+      }
+    }
+  }
+  if (OB_SUCC(ret)) {
+    position = low;
+  }
+  return ret;
+}
+
 class ObTextRetrievalDaaTTokenIter final : public ObISRDaaTDimIter
 {
+  friend class TextTokenBatchTestPeer;
 public:
   ObTextRetrievalDaaTTokenIter();
   virtual ~ObTextRetrievalDaaTTokenIter() {}
@@ -132,6 +182,8 @@ public:
   virtual int advance_to(const ObDatum &id_datum) override;
   virtual int get_curr_score(double &score) const override;
   virtual int get_curr_id(const ObDatum *&id_datum) const override;
+  virtual int get_next_doc_id_batch(const ObDocIdExt *&ids, int64_t &count) override;
+  virtual bool is_fixed16_doc_id_batch() const override { return doc_id_batch_fixed16_; }
 public:
   int get_token_doc_cnt(int64_t &token_doc_cnt) const { return token_iter_->get_token_doc_cnt(token_doc_cnt); }
   virtual int get_dim_max_score(double &score) override {
@@ -156,6 +208,7 @@ private:
   ObFixedArray<double, ObIAllocator> relevance_; // when ~ObFixedArray(), wikll destory itself
   ObFixedArray<ObDocIdExt, ObIAllocator> doc_id_;
   common::ObDatumCmpFuncType cmp_func_;
+  bool doc_id_batch_fixed16_;
   bool is_inited_;
   DISALLOW_COPY_AND_ASSIGN(ObTextRetrievalDaaTTokenIter);
 };

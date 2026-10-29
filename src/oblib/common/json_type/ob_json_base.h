@@ -229,6 +229,7 @@ public:
   OB_INLINE bool is_tree() const { return get_internal_type() == ObJsonInType::JSON_TREE; }
   OB_INLINE bool is_bin() const { return get_internal_type() == ObJsonInType::JSON_BIN; }
   OB_INLINE ObIAllocator *get_allocator() { return allocator_; }
+  OB_INLINE ObIAllocator *get_allocator() const { return allocator_; }
   OB_INLINE void set_allocator(ObIAllocator *allocator) { allocator_ = allocator; }
   virtual int reset() { return OB_SUCCESS; }
 public:
@@ -460,14 +461,16 @@ private:
   // @return Returns OB_SUCCESS on success, error code otherwise.
   int print_jtime(ObJsonBuffer &j_buf, bool is_quoted) const;
 
+protected:
   // Change json array to string.
   //
   // @param [in, out] j_buf      The dest buf.
   // @param [in]      depth     The depth of json tree.
   // @param [in]      is_pretty Whether is from json funcion JSON_PRETTY or not.
   // @return Returns OB_SUCCESS on success, error code otherwise.
-  int print_array(ObJsonBuffer &j_buf, uint64_t depth, bool is_pretty) const;
+  virtual int print_array(ObJsonBuffer &j_buf, uint64_t depth, bool is_pretty) const;
 
+private:
   // Change json object to string.
   //
   // @param [in, out] j_buf      The dest buf.

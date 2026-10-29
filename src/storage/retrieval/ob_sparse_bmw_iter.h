@@ -55,9 +55,10 @@ protected:
   }
 
 private:
-  ObISRDimBlockMaxIter *get_iter(const int64_t iter_idx) const
+  OB_INLINE ObISRDimBlockMaxIter *get_iter(const int64_t iter_idx) const
   {
-    return static_cast<ObISRDimBlockMaxIter *>(dim_iters_->at(iter_idx));
+    OB_ASSERT(iter_idx >= 0 && iter_idx < dim_iters_->count());
+    return static_cast<ObISRDimBlockMaxIter *>(dim_iters_->get_data()[iter_idx]);
   }
   int fill_merge_heap_with_shallow_dims(const ObDatum *last_range_border_id, const bool inclusive);
   int try_generate_next_range_from_merge_heap(
@@ -67,8 +68,16 @@ private:
   int project_rows_from_top_k_heap(const int64_t capacity, int64_t &count);
   int unify_dim_iters_for_next_round();
   int advance_dim_iters_for_next_round(const ObDatum &target_id, const bool iter_end_available);
-  void set_next_round_iter_end(const int64_t idx) { next_round_iter_idxes_[idx] = -1; }
-  bool is_next_round_iter_end(const int64_t idx) const { return next_round_iter_idxes_[idx] == -1; }
+  OB_INLINE void set_next_round_iter_end(const int64_t idx)
+  {
+    OB_ASSERT(idx >= 0 && idx < next_round_iter_idxes_.count());
+    next_round_iter_idxes_.get_data()[idx] = -1;
+  }
+  OB_INLINE bool is_next_round_iter_end(const int64_t idx) const
+  {
+    OB_ASSERT(idx >= 0 && idx < next_round_iter_idxes_.count());
+    return next_round_iter_idxes_.get_data()[idx] == -1;
+  }
 
 protected:
   enum BMWStatus{

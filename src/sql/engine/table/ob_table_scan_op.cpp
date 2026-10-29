@@ -679,6 +679,7 @@ ObTableScanOp::ObTableScanOp(ObExecContext &exec_ctx, const ObOpSpec &spec, ObOp
     in_rescan_(false),
     domain_index_(),
     fts_index_(),
+    fts_output_exprs_(),
     output_   (nullptr),
     fold_iter_(nullptr),
     iter_tree_(nullptr),
@@ -2199,7 +2200,10 @@ ERRSIM_POINT_DEF(EN_TABLE_SCAN_RETRY_WAIT_EVENT_ERRSIM);
 int ObTableScanOp::inner_get_next_batch(const int64_t max_row_cnt)
 {
   int ret = OB_SUCCESS;
-  if (OB_UNLIKELY(rand_scan_processor_.use_rand_scan())) {
+  if (OB_UNLIKELY(MY_SPEC.is_fts_ddl_)) {
+    if (OB_FAIL(inner_get_next_fts_index_batch(max_row_cnt))) {
+    }
+  } else if (OB_UNLIKELY(rand_scan_processor_.use_rand_scan())) {
     if (OB_FAIL(rand_scan_processor_.inner_get_next_batch(max_row_cnt))) {
     }
   } else if (OB_FAIL(inner_get_next_batch_for_tsc(max_row_cnt))) {
@@ -3643,6 +3647,83 @@ int ObTableScanOp::inner_get_next_fts_index_row()
   return ret;
 }
 
+int ObTableScanOp::inner_get_next_fts_index_batch(const int64_t max_row_cnt)
+{
+  int ret = OB_SUCCESS;
+  clear_evaluated_flag();
+  brs_.size_ = 0;
+  brs_.end_ = iter_end_;
+  const int64_t capacity = MIN(max_row_cnt, MY_SPEC.max_batch_size_);
+  if (OB_UNLIKELY(capacity <= 0)) {
+    ret = OB_INVALID_ARGUMENT;
+  } else if (iter_end_) {
+  } else if (nullptr != tsc_rtdef_.scan_rtdef_.sample_info_) {
+    // DDL samples physical documents before rescanning to build the index.
+    // Keep that phase scalar; it must not sample expanded token rows.
+    ObEvalCtx::BatchInfoScopeGuard guard(eval_ctx_);
+    guard.set_batch_idx(0);
+    guard.set_batch_size(1);
+    if (OB_FAIL(inner_get_next_row_implement())) {
+      if (OB_ITER_END == ret) {
+        brs_.end_ = true;
+        iter_end_ = true;
+        ret = OB_SUCCESS;
+      }
+    } else {
+      brs_.size_ = 1;
+      brs_.all_rows_active_ = true;
+    }
+  } else {
+    ObEvalCtx::BatchInfoScopeGuard guard(eval_ctx_);
+    // Storage and checksum processing still consume exactly one source
+    // document. All token/document-id bytes are retained by fts_index_.
+    guard.set_batch_idx(0);
+    guard.set_batch_size(1);
+    blocksstable::ObDatumRow *row = nullptr;
+    if (OB_FAIL(fts_index_.get_next_row(row))) {
+      if (OB_ITER_END != ret) {
+      } else if (OB_FAIL(fetch_next_fts_index_rows())) {
+        if (OB_ITER_END == ret) {
+          brs_.end_ = true;
+          iter_end_ = true;
+          ret = OB_SUCCESS;
+        }
+      } else if (OB_FAIL(fts_index_.get_next_row(row))) {
+      }
+    }
+    guard.set_batch_size(capacity);
+    while (OB_SUCC(ret) && !brs_.end_ && brs_.size_ < capacity) {
+      guard.set_batch_idx(brs_.size_);
+      if (OB_FAIL(fill_generated_fts_cols(row))) {
+      } else {
+        ++brs_.size_;
+        if (brs_.size_ < capacity && OB_FAIL(fts_index_.get_next_row(row))) {
+          if (OB_ITER_END == ret) {
+            // Never fetch another document after producing output: segment()
+            // resets the arena containing every datum in this batch.
+            ret = OB_SUCCESS;
+            break;
+          }
+        }
+      }
+    }
+    if (OB_SUCC(ret)) {
+      const ObExprOperatorType *types = MY_SPEC.is_fts_index_aux_
+          ? ObFTIndexRowCache::FTS_INDEX_EXPR_TYPE : ObFTIndexRowCache::FTS_DOC_WORD_EXPR_TYPE;
+      for (int64_t i = 0; OB_SUCC(ret) && i < 4; ++i) {
+        ObExpr *expr = nullptr;
+        if (OB_FAIL(get_output_fts_col_expr_by_type(types[i], expr))) {
+        } else {
+          expr->get_evaluated_flags(eval_ctx_).set_all(brs_.size_);
+          expr->get_eval_info(eval_ctx_).cnt_ = brs_.size_;
+        }
+      }
+      brs_.all_rows_active_ = true;
+    }
+  }
+  return ret;
+}
+
 int ObTableScanOp::fetch_next_fts_index_rows()
 {
   int ret = OB_SUCCESS;
@@ -3699,7 +3780,13 @@ int ObTableScanOp::fill_generated_fts_cols(blocksstable::ObDatumRow *row)
       } else {
         ObDatum &datum = expr->locate_datum_for_write(eval_ctx_);
         ObEvalInfo &eval_info = expr->get_eval_info(eval_ctx_);
-        if (OB_FAIL(datum.from_storage_datum(row->storage_datums_[i], types[i]))) {
+        // Tables without an explicit primary key can use a fixed-width hidden
+        // key as the document id.
+        // Copy it into the expression's own result buffer: the next physical
+        // scan may write through this datum after the document arena is reused.
+        const ObObjDatumMapType map_type = T_FUN_SYS_DOC_ID == expr_types[i]
+            ? expr->obj_datum_map_ : types[i];
+        if (OB_FAIL(datum.from_storage_datum(row->storage_datums_[i], map_type))) {
         } else {
           eval_info.evaluated_ = true;
           eval_info.projected_ = true;
@@ -3716,11 +3803,18 @@ int ObTableScanOp::get_output_fts_col_expr_by_type(
 {
   int ret = OB_SUCCESS;
   expr = nullptr;
-  if (OB_UNLIKELY(T_FUN_SYS_WORD_SEGMENT != type
-               && T_FUN_SYS_DOC_ID != type
-               && T_FUN_SYS_WORD_COUNT != type
-               && T_FUN_SYS_DOC_LENGTH != type)) {
+  int64_t cache_idx = -1;
+  switch (type) {
+    case T_FUN_SYS_WORD_SEGMENT: cache_idx = 0; break;
+    case T_FUN_SYS_DOC_ID: cache_idx = 1; break;
+    case T_FUN_SYS_WORD_COUNT: cache_idx = 2; break;
+    case T_FUN_SYS_DOC_LENGTH: cache_idx = 3; break;
+    default: break;
+  }
+  if (OB_UNLIKELY(cache_idx < 0)) {
     ret = OB_INVALID_ARGUMENT;
+  } else if (OB_NOT_NULL(fts_output_exprs_[cache_idx])) {
+    expr = fts_output_exprs_[cache_idx];
   } else if (T_FUN_SYS_DOC_ID == type) {
     for (int64_t i = 0; OB_SUCC(ret) && OB_ISNULL(expr) && i < MY_SPEC.output_.count(); ++i) {
       ObExpr *tmp_expr = MY_SPEC.output_.at(i);
@@ -3747,6 +3841,10 @@ int ObTableScanOp::get_output_fts_col_expr_by_type(
   }
   if (OB_SUCC(ret) && OB_ISNULL(expr)) {
     ret = OB_ERR_UNEXPECTED;
+  } else if (OB_SUCC(ret)) {
+    // Resolve lazily so malformed output expressions retain their first-use
+    // errors. The spec and its expressions outlive this operator and rescans.
+    fts_output_exprs_[cache_idx] = expr;
   }
   return ret;
 }

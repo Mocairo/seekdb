@@ -35,7 +35,6 @@ int ObBEngFTParser::get_next_token(
   int ret = OB_SUCCESS;
   ObDatum token;
   int64_t token_freq = 0;
-  char *buf = nullptr;
   word = nullptr;
   word_len = 0;
   char_len = 0;
@@ -49,11 +48,10 @@ int ObBEngFTParser::get_next_token(
     }
   } else if (OB_ISNULL(token.ptr_) || OB_UNLIKELY(0 >= token.len_ || 0 >= token_freq)) {
     ret = OB_INVALID_ARGUMENT;
-  } else if (OB_ISNULL(buf = static_cast<char *>(allocator_.alloc(token.len_)))) {
-    ret = OB_ALLOCATE_MEMORY_FAILED;
   } else {
-    MEMCPY(buf, token.ptr_, token.len_);
-    word = buf;
+    // The normalizer writes directly into the caller's token allocator. Its
+    // output remains valid after the next token and after parser destruction.
+    word = token.ptr_;
     word_len = token.len_;
     char_len = token.len_;
     word_freq = token_freq;
@@ -73,11 +71,9 @@ int ObBEngFTParser::init(ObFTParserParam *param)
     ret = OB_NOT_SUPPORTED;
   } else {
     doc_.set_string(param->fulltext_, param->ft_length_);
-    analysis_ctx_.cs_ = param->cs_;
-    analysis_ctx_.filter_stopword_ = false;
-    analysis_ctx_.need_grouping_ = false;
-    if (OB_FAIL(english_analyzer_.init(analysis_ctx_, *param->allocator_))) {
-    } else if (OB_FAIL(segment(doc_, token_stream_))) {
+    normalizer_.set_token_allocator(&allocator_);
+    if (OB_FAIL(normalizer_.init(param->cs_, tokenizer_))) {
+    } else if (OB_FAIL(segment(doc_, param->cs_, token_stream_))) {
     } else if (OB_ISNULL(token_stream_)) {
       ret = OB_ERR_UNEXPECTED;
     } else {
@@ -92,6 +88,7 @@ int ObBEngFTParser::init(ObFTParserParam *param)
 
 int ObBEngFTParser::segment(
     const common::ObDatum &doc,
+    const ObCharsetInfo *cs,
     share::ObITokenStream *&token_stream)
 {
   int ret = OB_SUCCESS;
@@ -99,15 +96,20 @@ int ObBEngFTParser::segment(
     ret = OB_INVALID_ARGUMENT;
   } else if (OB_UNLIKELY(UINT32_MAX < doc.len_)) {
     ret = OB_NOT_SUPPORTED;
-  } else if (OB_FAIL(english_analyzer_.analyze(doc, token_stream))) {
+  } else {
+    normalizer_.reuse();
+    if (OB_FAIL(tokenizer_.open(doc, cs))) {
+    } else {
+      token_stream = &normalizer_;
+    }
   }
   return ret;
 }
 
 void ObBEngFTParser::reset()
 {
-  analysis_ctx_.reset();
-  english_analyzer_.reset();
+  normalizer_.reset();
+  tokenizer_.reset();
   doc_.reset();
   token_stream_ = nullptr;
   is_inited_ = false;

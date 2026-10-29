@@ -1,0 +1,80 @@
+# description: shared sort preserves complete ordering across workarea policies.
+# The wide key crosses the initial workarea estimate; all ID results are checked,
+# including equal keys, NULLs, binary NUL/high bytes, case/accent and end spaces.
+# MANULE is the existing accepted spelling of the statement-level policy hint.
+# No global workarea settings are changed by this test.
+
+--disable_query_log
+--disable_warnings
+drop database if exists fts_sort_workarea;
+--enable_warnings
+create database fts_sort_workarea;
+use fts_sort_workarea;
+set names utf8mb4;
+create table digits (n int primary key);
+insert into digits values (0),(1),(2),(3),(4),(5),(6),(7),(8),(9);
+create table docs (
+  id int primary key,
+  n int,
+  ci varchar(20) collate utf8mb4_general_ci,
+  b varbinary(20),
+  wide varchar(8192) collate utf8mb4_bin
+) charset utf8mb4;
+insert into docs
+select id, if(mod(id,11)=0,null,mod(id*37,19)-9),
+  case mod(id,12)
+    when 0 then null when 1 then 'alpha' when 2 then 'ALPHA'
+    when 3 then convert(unhex('C3816C706861') using utf8mb4)
+    when 4 then 'alpha ' when 5 then 'Beta' when 6 then 'BETA'
+    when 7 then '' when 8 then convert(unhex('C3A9') using utf8mb4)
+    when 9 then 'E' when 10 then 'e ' when 11 then 'z' end,
+  case mod(id,11)
+    when 0 then null when 1 then unhex('') when 2 then unhex('00')
+    when 3 then unhex('61') when 4 then unhex('41') when 5 then unhex('6120')
+    when 6 then unhex('61007A') when 7 then unhex('FF') when 8 then unhex('7F')
+    when 9 then unhex('6100') when 10 then unhex('6161') end,
+  concat(lpad(mod(id*19,31),2,'0'),repeat('x',8190))
+from (select a.n+10*b.n+100*c.n id from digits a,digits b,digits c) q
+where id<512;
+
+--echo # AUTO nullable multikey, scalar
+select /*+ opt_param('rowsets_max_rows' 0) */ id from docs
+order by n asc, ci asc, b desc, wide asc, id asc;
+--echo # AUTO nullable multikey, vector
+select /*+ opt_param('rowsets_max_rows' 256) */ id from docs
+order by n asc, ci asc, b desc, wide asc, id asc;
+--echo # MANUAL nullable multikey, scalar
+select /*+ opt_param('workarea_size_policy' 'MANULE') opt_param('rowsets_max_rows' 0) */ id from docs
+order by n asc, ci asc, b desc, wide asc, id asc;
+--echo # MANUAL nullable multikey, vector
+select /*+ opt_param('workarea_size_policy' 'MANULE') opt_param('rowsets_max_rows' 256) */ id from docs
+order by n asc, ci asc, b desc, wide asc, id asc;
+
+--echo # AUTO binary multikey, scalar
+select /*+ opt_param('rowsets_max_rows' 0) */ id from docs
+order by b asc, n desc, ci desc, wide desc, id asc;
+--echo # AUTO binary multikey, vector
+select /*+ opt_param('rowsets_max_rows' 256) */ id from docs
+order by b asc, n desc, ci desc, wide desc, id asc;
+--echo # MANUAL binary multikey, scalar
+select /*+ opt_param('workarea_size_policy' 'MANULE') opt_param('rowsets_max_rows' 0) */ id from docs
+order by b asc, n desc, ci desc, wide desc, id asc;
+--echo # MANUAL binary multikey, vector
+select /*+ opt_param('workarea_size_policy' 'MANULE') opt_param('rowsets_max_rows' 256) */ id from docs
+order by b asc, n desc, ci desc, wide desc, id asc;
+
+--echo # AUTO general_ci multikey, scalar
+select /*+ opt_param('rowsets_max_rows' 0) */ id from docs
+order by ci desc, b asc, n asc, wide asc, id desc;
+--echo # AUTO general_ci multikey, vector
+select /*+ opt_param('rowsets_max_rows' 256) */ id from docs
+order by ci desc, b asc, n asc, wide asc, id desc;
+--echo # MANUAL general_ci multikey, scalar
+select /*+ opt_param('workarea_size_policy' 'MANULE') opt_param('rowsets_max_rows' 0) */ id from docs
+order by ci desc, b asc, n asc, wide asc, id desc;
+--echo # MANUAL general_ci multikey, vector
+select /*+ opt_param('workarea_size_policy' 'MANULE') opt_param('rowsets_max_rows' 256) */ id from docs
+order by ci desc, b asc, n asc, wide asc, id desc;
+
+drop database fts_sort_workarea;
+--enable_query_log

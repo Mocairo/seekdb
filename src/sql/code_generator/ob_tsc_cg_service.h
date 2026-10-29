@@ -37,6 +37,7 @@ struct ObDASAttachCtDef;
 
 class ObTscCgService
 {
+  friend class TscCgServiceTestPeer;
 public:
   ObTscCgService(ObStaticEngineCG &cg)
     : cg_(cg)

@@ -3269,6 +3269,27 @@ int ObAggregateProcessor::prepare_aggr_result(const ObChunkDatumStore::StoredRow
   return ret;
 }
 
+namespace
+{
+inline int64_t count_selected_rows(const ObAggregateProcessor::ObSelector &selector)
+{
+  // Explicit selectors already describe the selected rows, including repeats.
+  return selector.count_;
+}
+
+inline int64_t count_selected_rows(const ObAggregateProcessor::ObBatchRowsSlice &selector)
+{
+  int64_t row_count = 0;
+  if (selector.begin_pos_ < selector.end_pos_) {
+    const int64_t size = selector.end_pos_ - selector.begin_pos_;
+    // Three-stage aggregation also uses single-row slices.
+    row_count = 1 == size ? !selector.brs_->skip_->at(selector.begin_pos_)
+        : size - selector.brs_->skip_->accumulate_bit_cnt(selector.begin_pos_, selector.end_pos_);
+  }
+  return row_count;
+}
+} // namespace
+
 template <typename T>
 int ObAggregateProcessor::process_aggr_batch_result(
     const ObIArray<ObExpr *> *param_exprs,
@@ -3280,12 +3301,8 @@ int ObAggregateProcessor::process_aggr_batch_result(
   const ObItemType aggr_fun = aggr_info.get_expr_type();
   if (NULL != param_exprs && param_exprs->empty()) {
     if (T_FUN_COUNT == aggr_fun) {
-      //count asterisk(*) case: null is counted
-      uint16_t row_count = 0;
-      for (auto it = selector.begin(); it < selector.end(); selector.next(it)) {
-        ++row_count;
-      }
-      aggr_cell.add_row_count(row_count);
+      // COUNT(*) includes null values and only needs the selected cardinality.
+      aggr_cell.add_row_count(count_selected_rows(selector));
     } else if (T_FUN_GROUP_ID == aggr_fun) {
       // do nothing
     } else {

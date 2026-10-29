@@ -551,8 +551,12 @@ int ObCharset::strcmp(ObCollationType collation_type,
                       int64_t str2_len)
 {
   int result = 0;
-  if (is_argument_valid(collation_type, str1, str1_len, str2, str2_len)) {
-    const ObCharsetInfo *cs = get_charset(collation_type);
+  // Resolve the charset once, then validate both strings using that descriptor.
+  const ObCharsetInfo *cs = NULL;
+  if (collation_type > CS_TYPE_INVALID && collation_type < CS_TYPE_MAX) {
+    cs = get_charset(collation_type);
+  }
+  if (is_argument_valid(cs, str1, str1_len) && is_argument_valid(cs, str2, str2_len)) {
     const bool t_is_prefix = false;
     result = cs->coll->strnncoll(cs,
                               reinterpret_cast<const unsigned char *>(str1),
@@ -571,8 +575,12 @@ int ObCharset::strcmpsp(ObCollationType collation_type,
                         bool cmp_endspace)
 {
   int result = 0;
-  if (is_argument_valid(collation_type, str1, str1_len, str2, str2_len)) {
-    const ObCharsetInfo *cs = get_charset(collation_type);
+  // Reuse the resolved descriptor for validation and comparison.
+  const ObCharsetInfo *cs = NULL;
+  if (collation_type > CS_TYPE_INVALID && collation_type < CS_TYPE_MAX) {
+    cs = get_charset(collation_type);
+  }
+  if (is_argument_valid(cs, str1, str1_len) && is_argument_valid(cs, str2, str2_len)) {
     result = cs->coll->strnncollsp(cs,
                                 reinterpret_cast<const unsigned char *>(str1),
                                 str1_len,

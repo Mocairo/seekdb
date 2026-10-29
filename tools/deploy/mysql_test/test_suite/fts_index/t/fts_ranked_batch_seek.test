@@ -1,0 +1,54 @@
+# description: ranked retrieval keeps every score and top-k result across cached batches.
+--disable_warnings
+drop database if exists fts_ranked_batch_seek;
+--enable_warnings
+create database fts_ranked_batch_seek;
+use fts_ranked_batch_seek;
+create table digits(n int primary key);
+insert into digits values (0),(1),(2),(3),(4),(5),(6),(7),(8),(9);
+create table docs(id bigint primary key, body text,
+  fulltext index ft(body) with parser beng) charset utf8mb4;
+# Dense and sparse posting lists interleave. Vary both frequency and document
+# length, so a far seek must retain the matching row's score as well as its ID.
+insert into docs
+select n + 1, concat(repeat('alpha ', 1 + mod(n, 7)),
+  if(mod(n, 11) = 0, repeat('beta ', 1 + mod(n, 13)), ''),
+  if(mod(n, 37) = 0, repeat('gamma ', 1 + mod(n, 17)), ''),
+  repeat('filler ', 1 + mod(n, 103)))
+from (select a.n * 100 + b.n * 10 + c.n n from digits a, digits b, digits c) numbers;
+
+# Explicit order verifies complete IDs and actual scores for top-k and OFFSET.
+select /*+ opt_param('rowsets_max_rows' 4) */ id,
+  round(match(body) against('alpha beta gamma'), 8) score
+from docs where match(body) against('alpha beta gamma') order by score desc, id limit 37;
+select /*+ opt_param('rowsets_max_rows' 128) */ id,
+  round(match(body) against('alpha beta gamma'), 8) score
+from docs where match(body) against('alpha beta gamma') order by score desc, id limit 37;
+select /*+ opt_param('rowsets_max_rows' 4) */ id,
+  round(match(body) against('alpha beta gamma'), 8) score
+from docs where match(body) against('alpha beta gamma') order by score desc, id limit 17 offset 19;
+
+# Implicit relevance top-k follows the same storage BMW path as bare LIMIT.
+select id, round(score, 8) score from (
+  select /*+ opt_param('rowsets_max_rows' 4) */ id,
+    match(body) against('alpha beta gamma') score
+  from docs where match(body) against('alpha beta gamma') limit 20
+) ranked order by id;
+select id, round(score, 8) score from (
+  select /*+ opt_param('rowsets_max_rows' 128) */ id,
+    match(body) against('alpha beta gamma') score
+  from docs where match(body) against('alpha beta gamma') limit 20
+) ranked order by id;
+
+# Prepared rescans change dense/sparse terms and include an exhausted list.
+prepare ranked_sql from 'select id, round(score, 8) score from (select id, match(body) against(?) score from docs where match(body) against(?) limit 20) ranked order by id';
+set @query = 'alpha beta gamma';
+execute ranked_sql using @query, @query;
+set @query = 'beta gamma absent';
+execute ranked_sql using @query, @query;
+set @query = 'absent';
+execute ranked_sql using @query, @query;
+set @query = 'alpha beta gamma';
+execute ranked_sql using @query, @query;
+deallocate prepare ranked_sql;
+drop database fts_ranked_batch_seek;

@@ -82,7 +82,10 @@ public:
 
 private:
   static const int64_t DEFAULT_STOPWORD_BUCKET_NUM = 37L;
-  typedef common::hash::ObHashSet<storage::ObFTWord> StopWordSet;
+  // Fully populated before the server starts its workers, then read-only until
+  // those workers have stopped. Lookup does not need a per-bucket reader lock.
+  typedef common::hash::ObHashSet<storage::ObFTWord,
+      common::hash::NoPthreadDefendMode> StopWordSet;
 
   StopWordSet stopword_set_;
   ObObjMeta stopword_type_;

@@ -24,6 +24,7 @@
 #include "data_plane/fts/ob_fts_parser_helper.h"
 #include "data_plane/fts/ob_fts_doc_word_scan.h"
 #include "data_plane/fts/ob_fts_parser_helper.h"
+#include "data_plane/blocksstable/ob_datum_row.h"
 #include "share/geo/ob_srs_provider.h"
 
 namespace oceanbase
@@ -47,14 +48,21 @@ public:
       const common::ObString &parser_name,
       const common::ObString &parser_properties);
   int segment(const common::ObObjMeta &ft_obj_meta, const ObDatum &doc_id, const common::ObString &fulltext);
+  // The row is reused by the next call. Its word and document-id bytes remain
+  // valid until segment(), reuse() or reset() starts another document.
   int get_next_row(blocksstable::ObDatumRow *&row);
   void reset();
   void reuse();
   TO_STRING_KV(K_(row_idx), K_(is_fts_index_aux), K_(helper), K_(is_inited),
-               "row_count", rows_.count());
+               "row_count", words_.size());
 private:
+  int prepare_word_map(const int64_t fulltext_length);
   lib::MemoryContext merge_memctx_;
-  ObDomainIndexRow rows_;
+  storage::ObFTWordMap words_;
+  storage::ObFTWordMap::iterator word_iter_;
+  blocksstable::ObDatumRow row_;
+  ObDatum doc_id_;
+  int64_t doc_length_;
   uint64_t row_idx_;
   bool is_fts_index_aux_;
   storage::ObFTParseHelper helper_;

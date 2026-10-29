@@ -1,0 +1,12 @@
+load("//bazel:defs.bzl", "seekdb_module_cc_test")
+
+package(default_visibility = ["//visibility:private"])
+
+seekdb_module_cc_test(
+    name = "sql_tests",
+    srcs = glob(["code_generator/*.cpp", "engine/basic/*.cpp", "engine/expr/*.cpp", "rewrite/*.cpp"]),
+    test_hdrs = [],
+    module_interface = "//src/sql:sql_unit_test_interface",
+    unity_exceptions = {"engine/basic/test_count_batch.cpp": "Isolate aggregate processor fixture headers."},
+    shard_count = 1,
+)

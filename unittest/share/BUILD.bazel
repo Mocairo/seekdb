@@ -1,0 +1,11 @@
+load("//bazel:defs.bzl", "seekdb_module_cc_test")
+
+package(default_visibility = ["//visibility:private"])
+
+seekdb_module_cc_test(
+    name = "share_tests",
+    srcs = glob(["charset/*.cpp"]),
+    test_hdrs = [],
+    module_interface = "//src/share:share_unit_test_interface",
+    shard_count = 1,
+)
