@@ -381,6 +381,23 @@ struct ObDatumStrCmpImpl
     return OB_SUCCESS;
   }
 
+  // The caller supplies at least three bytes. Reject non-canonical UTF-8;
+  // those inputs must retain the charset comparator's binary fallback.
+  static OB_INLINE bool first_three_byte_weight(const char *ptr, uint32_t &weight)
+  {
+    const unsigned char a = static_cast<unsigned char>(ptr[0]);
+    const unsigned char b = static_cast<unsigned char>(ptr[1]);
+    const unsigned char c = static_cast<unsigned char>(ptr[2]);
+    if (a < 0xe0 || a > 0xef || (b & 0xc0) != 0x80 || (c & 0xc0) != 0x80
+        || (a == 0xe0 && b < 0xa0) || (a == 0xed && b >= 0xa0)) {
+      return false;
+    }
+    const uint32_t wc = ((a & 0x0f) << 12) | ((b & 0x3f) << 6) | (c & 0x3f);
+    const ObUnicaseInfoChar *page = ob_unicase_default.page[wc >> 8];
+    weight = nullptr == page ? wc : page[wc & 0xff].sort;
+    return true;
+  }
+
   template <typename Word>
   static OB_INLINE bool equal_ends(const char *l, const char *r, const uint32_t len)
   {
@@ -467,6 +484,26 @@ struct ObDatumStrCmp : public ObDefined<SupportedCollection<CS_TYPE>::defined_>
         && (l.ptr_ == r.ptr_ || ObDatumStrCmpImpl::equal_short_string(l.ptr_, r.ptr_, l.len_))) {
       cmp_ret = 0;
       return OB_SUCCESS;
+    }
+    // Unequal three-byte first characters can decide GENERAL_CI order without
+    // dispatching through the charset interface. Keep byte-equal short strings
+    // above this path, and preserve the original comparator when weights agree.
+    if (CS_TYPE == CS_TYPE_UTF8MB4_GENERAL_CI
+        && !l.is_null() && !r.is_null()
+        && ObDatumDesc::NONE == l.flag_ && ObDatumDesc::NONE == r.flag_
+        && l.len_ >= 3 && r.len_ >= 3
+        && nullptr != l.ptr_ && nullptr != r.ptr_
+        && static_cast<unsigned char>(l.ptr_[0]) >= 0xe0
+        && static_cast<unsigned char>(r.ptr_[0]) >= 0xe0
+        && 0 != MEMCMP(l.ptr_, r.ptr_, 3)) {
+      uint32_t l_weight = 0;
+      uint32_t r_weight = 0;
+      if (ObDatumStrCmpImpl::first_three_byte_weight(l.ptr_, l_weight)
+          && ObDatumStrCmpImpl::first_three_byte_weight(r.ptr_, r_weight)
+          && l_weight != r_weight) {
+        cmp_ret = l_weight < r_weight ? -1 : 1;
+        return OB_SUCCESS;
+      }
     }
     return ObDatumStrCmpImpl::cmp(l, r, cmp_ret, CS_TYPE, WITH_END_SPACE);
   }

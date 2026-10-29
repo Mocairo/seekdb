@@ -323,6 +323,93 @@ TEST(SortKeyCompare, general_ci_ascii_first_weight_preserves_collation_and_dispa
 }
 
 template <bool END_SPACE>
+void check_general_ci_three_byte_weights()
+{
+  const auto encode = [](uint32_t cp) {
+    std::string bytes;
+    bytes += static_cast<char>(0xe0 | (cp >> 12));
+    bytes += static_cast<char>(0x80 | ((cp >> 6) & 0x3f));
+    bytes += static_cast<char>(0x80 | (cp & 0x3f));
+    return bytes;
+  };
+  const auto check = [](const std::string &left, const std::string &right) {
+    ObDatum l, r;
+    l.set_string(left.data(), left.size());
+    r.set_string(right.data(), right.size());
+    check_short_general_ci_pair(l, r);
+    int actual = 0;
+    const int legacy = ObCharset::strcmpsp(CS_TYPE_UTF8MB4_GENERAL_CI,
+        l.ptr_, l.len_, r.ptr_, r.len_, END_SPACE);
+    ASSERT_EQ(OB_SUCCESS,
+        (datum_cmp::ObDatumStrCmp<CS_TYPE_UTF8MB4_GENERAL_CI, END_SPACE>::cmp(l, r, actual)));
+    ASSERT_EQ(legacy > 0 ? 1 : (legacy < 0 ? -1 : 0), actual);
+  };
+  // Every valid three-byte code point, including non-identity weight pages,
+  // participates on each side; same-prefix suffixes must still be compared.
+  for (uint32_t cp = 0x800; cp <= 0xffff; ++cp) {
+    if (cp >= 0xd800 && cp <= 0xdfff) { continue; }
+    const uint32_t other = 0x800 + ((cp * 7919U) % 0xf800);
+    for (const auto &suffix : std::vector<std::pair<std::string, std::string>>{
+        {"", ""}, {" ", "  "}, {"\xffx", "\xc0\x80"},
+        {std::string(65, 'x'), std::string(66, 'x')}}) {
+      check(encode(cp) + suffix.first, encode(other) + suffix.second);
+      check(encode(other) + suffix.second, encode(cp) + suffix.first);
+      check(encode(cp) + suffix.first, encode(cp) + suffix.second);
+      ASSERT_FALSE(::testing::Test::HasFatalFailure());
+    }
+  }
+  // Exhaust lead/second-byte combinations and continuation boundaries, including
+  // overlong encodings, surrogates, malformed suffixes, and truncated prefixes.
+  for (int a = 0xe0; a <= 0xef; ++a) {
+    for (int b = 0; b < 256; ++b) {
+      for (int c : {0, 0x7f, 0x80, 0xbf, 0xc0, 0xff}) {
+        std::string value{static_cast<char>(a), static_cast<char>(b), static_cast<char>(c)};
+        for (int len : {1, 2, 3}) {
+          check(value.substr(0, len), encode(0x4e2d));
+          check(encode(0x4e2d), value.substr(0, len));
+        }
+        ASSERT_FALSE(::testing::Test::HasFatalFailure());
+      }
+    }
+  }
+}
+
+TEST(SortKeyCompare, general_ci_three_byte_first_weight_matches_charset)
+{
+  check_general_ci_three_byte_weights<false>();
+  check_general_ci_three_byte_weights<true>();
+#if defined(__linux__)
+  const int64_t page_size = sysconf(_SC_PAGESIZE);
+  ASSERT_GT(page_size, 3);
+  void *mapping = mmap(nullptr, 3 * page_size, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+  ASSERT_NE(MAP_FAILED, mapping);
+  struct ThreeByteMappingGuard
+  {
+    void *mapping_;
+    int64_t size_;
+    ~ThreeByteMappingGuard() { munmap(mapping_, size_); }
+  } cleanup{mapping, 3 * page_size};
+  char *readable = static_cast<char *>(mapping) + page_size;
+  ASSERT_EQ(0, mprotect(readable, page_size, PROT_READ | PROT_WRITE));
+  for (const std::string &bytes : {
+      std::string("\xe4\xb8\xad"), std::string("\xe6\x96\x87"),
+      std::string("\xef\xbc\xa1"), std::string("\xef\xbd\x81"),
+      std::string("\xe0\x80\x80"), std::string("\xed\xa0\x80")}) {
+    for (int len : {1, 2, 3}) {
+      MEMCPY(readable, bytes.data(), len);
+      MEMCPY(readable + page_size - len, "\xe6\x96\x87", len);
+      ObDatum left, right;
+      left.set_string(readable, len);
+      right.set_string(readable + page_size - len, len);
+      check_short_general_ci_pair(left, right);
+      check_short_general_ci_pair(right, left);
+      ASSERT_FALSE(::testing::Test::HasFatalFailure());
+    }
+  }
+#endif
+}
+
+template <bool END_SPACE>
 void check_binary_comparison_against_charset()
 {
   std::vector<std::string> values = {

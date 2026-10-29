@@ -16,6 +16,11 @@
 #include <gtest/gtest.h>
 #include <cstring>
 #include <string>
+#include <vector>
+#if defined(__linux__)
+#include <sys/mman.h>
+#include <unistd.h>
+#endif
 #include "storage/fts/ik/ob_ik_char_util.h"
 #include "storage/fts/ik/ob_ik_cjk_processor.h"
 #include "storage/fts/ik/ob_ik_letter_processor.h"
@@ -95,6 +100,119 @@ TEST(FtsIKTest, malformed_utf8_and_unsupported_charset)
   }
   EXPECT_EQ(OB_NOT_SUPPORTED,
       ObFTCharUtil::classify_first_char(CS_TYPE_LATIN1_BIN, "a", 1, type));
+}
+
+void compare_context_with_legacy(const ObCollationType coll, const std::string &text)
+{
+  ObArenaAllocator allocator;
+  TokenizeContext context(coll, allocator, text.data(), text.size(), false);
+  int64_t cursor = 0;
+  int actual = context.init();
+  while (cursor < text.size()) {
+    int64_t length = 0;
+    CharType expected_type = CharType::USELESS;
+    int expected = ObCharset::first_valid_char(coll, text.data() + cursor,
+                                               text.size() - cursor, length);
+    if (OB_SUCCESS == expected) {
+      expected = ObFTCharUtil::classify_first_char(coll, text.data() + cursor, length, expected_type);
+    }
+    ASSERT_EQ(expected, actual) << coll << ", cursor " << cursor;
+    if (OB_SUCCESS != expected) { break; }
+    const char *ptr = nullptr;
+    uint8_t actual_length = 0;
+    CharType actual_type = CharType::USELESS;
+    ASSERT_EQ(OB_SUCCESS, context.current_char(ptr, actual_length));
+    ASSERT_EQ(OB_SUCCESS, context.current_char_type(actual_type));
+    ASSERT_EQ(length, actual_length);
+    ASSERT_EQ(expected_type, actual_type);
+    ASSERT_EQ(text.data() + cursor, ptr);
+    cursor += length;
+    actual = context.step_next();
+    if (cursor == text.size()) {
+      ASSERT_EQ(OB_ITER_END, actual);
+      ASSERT_TRUE(context.iter_end());
+    }
+  }
+}
+
+TEST(FtsIKTest, fused_character_validation_matches_all_utf8_scalars)
+{
+  unsigned char encoded[4];
+  for (ob_wc_t cp = 0; cp <= 0x10ffff; ++cp) {
+    if (cp >= 0xd800 && cp <= 0xdfff) { continue; }
+    const int length = ob_charset_encode_unicode<CHARSET_UTF8MB4>(
+        cp, encoded, encoded + sizeof(encoded));
+    ASSERT_GT(length, 0);
+    compare_context_with_legacy(CS_TYPE_UTF8MB4_BIN,
+        std::string(reinterpret_cast<const char *>(encoded), length));
+    ASSERT_FALSE(::testing::Test::HasFatalFailure()) << cp;
+  }
+}
+
+TEST(FtsIKTest, fused_character_validation_preserves_errors_and_other_charsets)
+{
+  std::vector<std::string> values = {
+    "a", "中", "Ａ１２", "😀", "a中Ａ１２😀", std::string("a\0b",3),
+    "\x80", "\xc0\xaf", "\xe0\x80\x80", "\xed\xa0\x80", "\xed\xbf\xbf",
+    "\xf4\x90\x80\x80", "\xf5\x80\x80\x80", "\xff", "\xe4\xb8", "\xf0\x9f\x98"};
+  for (int a = 0; a < 256; ++a) {
+    values.push_back(std::string(1, static_cast<char>(a)));
+    values.push_back(std::string{static_cast<char>(a), '\x80', '\x80', '\x80'});
+    values.push_back(std::string{static_cast<char>(a), '\xbf', '\xbf', '\xbf'});
+  }
+  for (auto cs : {CS_TYPE_UTF8MB4_BIN, CS_TYPE_UTF8MB4_GENERAL_CI,
+                 CS_TYPE_UTF16_BIN, CS_TYPE_UTF16LE_BIN, CS_TYPE_LATIN1_BIN}) {
+    for (const auto &value : values) {
+      compare_context_with_legacy(cs, value);
+      compare_context_with_legacy(cs, "a" + value);
+      ASSERT_FALSE(::testing::Test::HasFatalFailure());
+    }
+  }
+}
+
+TEST(FtsIKTest, fused_character_validation_respects_input_boundaries)
+{
+#if defined(__linux__)
+  const int64_t page_size = sysconf(_SC_PAGESIZE);
+  ASSERT_GT(page_size, 4);
+  void *mapping = mmap(nullptr, 3 * page_size, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+  ASSERT_NE(MAP_FAILED, mapping);
+  struct MappingGuard {
+    void *mapping_; int64_t bytes_;
+    ~MappingGuard() { munmap(mapping_, bytes_); }
+  } guard{mapping, 3 * page_size};
+  char *readable = static_cast<char *>(mapping) + page_size;
+  ASSERT_EQ(0, mprotect(readable, page_size, PROT_READ | PROT_WRITE));
+  ObArenaAllocator allocator;
+  for (const std::string &bytes : {
+      std::string("a"), std::string("\xc3\xa9"), std::string("\xe4\xb8\xad"),
+      std::string("\xf0\x9f\x98\x80"), std::string("\xed\xa0\x80"),
+      std::string("\xf4\x90\x80\x80")}) {
+    for (size_t length = 1; length <= bytes.size(); ++length) {
+      for (char *ptr : {readable, readable + page_size - length}) {
+        MEMCPY(ptr, bytes.data(), length);
+        int64_t expected_length = 0;
+        CharType expected_type = CharType::USELESS;
+        int expected = ObCharset::first_valid_char(CS_TYPE_UTF8MB4_BIN, ptr, length, expected_length);
+        if (OB_SUCCESS == expected) {
+          expected = ObFTCharUtil::classify_first_char(
+              CS_TYPE_UTF8MB4_BIN, ptr, expected_length, expected_type);
+        }
+        TokenizeContext context(CS_TYPE_UTF8MB4_BIN, allocator, ptr, length, false);
+        ASSERT_EQ(expected, context.init());
+        if (OB_SUCCESS == expected) {
+          const char *current = nullptr;
+          uint8_t actual_length = 0;
+          CharType actual_type = CharType::USELESS;
+          ASSERT_EQ(OB_SUCCESS, context.current_char(current, actual_length));
+          ASSERT_EQ(OB_SUCCESS, context.current_char_type(actual_type));
+          ASSERT_EQ(expected_length, actual_length);
+          ASSERT_EQ(expected_type, actual_type);
+        }
+      }
+    }
+  }
+#endif
 }
 
 class NoMatchDict final : public ObIFTDict
