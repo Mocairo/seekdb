@@ -730,7 +730,10 @@ int ObLS::register_local_services_()
 {
   int ret = OB_SUCCESS;
 
-  if (OB_FAIL(register_composition_log_handler_(DBMS_SCHEDULER_LOG_BASE_TYPE))) {
+  // Recovered unlock records must be compacted after the local replay barrier.
+  if (OB_FAIL(local_log_handler_set_.register_handler(
+      OBJ_LOCK_GARBAGE_COLLECT_SERVICE_LOG_BASE_TYPE, &lock_table_))) {
+  } else if (OB_FAIL(register_composition_log_handler_(DBMS_SCHEDULER_LOG_BASE_TYPE))) {
   } else if (OB_FAIL(register_composition_log_handler_(SYS_DDL_SCHEDULER_LOG_BASE_TYPE))) {
   } else if (OB_FAIL(register_composition_log_handler_(DDL_SERVICE_LAUNCHER_LOG_BASE_TYPE))) {
   } else if (OB_FAIL(register_composition_log_handler_(
@@ -846,6 +849,7 @@ void ObLS::unregister_common_service_()
 
 void ObLS::unregister_local_services_()
 {
+  local_log_handler_set_.unregister_handler(OBJ_LOCK_GARBAGE_COLLECT_SERVICE_LOG_BASE_TYPE);
   unregister_composition_log_handler_(DBMS_SCHEDULER_LOG_BASE_TYPE);
   unregister_composition_log_handler_(SYS_DDL_SCHEDULER_LOG_BASE_TYPE);
   unregister_composition_log_handler_(DDL_SERVICE_LAUNCHER_LOG_BASE_TYPE);

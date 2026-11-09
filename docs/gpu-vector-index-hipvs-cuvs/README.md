@@ -1,7 +1,7 @@
 # hipVS/cuVS GPU vector backend
 
-Status: **Phase 1 implemented and review-gated** on AMD `gfx1100` with ROCm
-7.2.4. This directory documents the current integration and its reproducible
+Status: **Implemented and review-gated** on AMD `gfx1100` with ROCm 7.2.4.
+This directory documents the current integration and its reproducible
 validation assets. Historical feasibility experiments remain available in Git
 history rather than in the product-facing tree.
 
@@ -22,7 +22,8 @@ The product integration lives in:
 
 - [`ob_vsag_adaptor.cpp`](../../src/oblib/lib/vector/ob_vsag_adaptor.cpp):
   per-index marking, buffered vectors, lazy CAGRA build/search, freshness and
-  safety fallback, trace points, and batch entry points.
+  safety fallback, raw CAGRA snapshot persistence, trace points, and batch
+  entry points.
 - [`ob_plugin_vector_index_adaptor.cpp`](../../src/observer/vector_index/ob_plugin_vector_index_adaptor.cpp):
   maps declarative `lib=cuvs` indexes to the adaptor handle.
 - [`ob_vector_index_util.cpp`](../../src/observer/vector_index/ob_vector_index_util.cpp):
@@ -47,6 +48,8 @@ seekdb_cuvs_build
 seekdb_cuvs_search
 seekdb_cuvs_free
 seekdb_cuvs_cagra_knn
+seekdb_cuvs_serialize
+seekdb_cuvs_deserialize
 ```
 
 Build seekdb with the resulting library:
@@ -123,14 +126,22 @@ The runner validates:
 The runner writes a machine-readable `summary.json` into its evidence directory.
 Results for a specific candidate belong in that pull request's description or a
 validation comment rather than in the source tree.
+The DDL persistence smoke runner also covers raw CAGRA snapshot write,
+reload, and shape validation:
+
+```bash
+docs/gpu-vector-index-hipvs-cuvs/validation/run_ddl_persistence_smoke.sh \
+  <container> <base.tsv-in-container> <host-run-dir>
+```
+
 The no-GPU DDL contract remains covered by
 [`vector_index_cuvs_ddl.test`](../../tools/deploy/mysql_test/test_suite/vector_index/t/vector_index_cuvs_ddl.test).
 
 ## Current limitations
 
 - Phase 1 supports dense float32 L2 indexes only.
-- GPU indexes are process-local and rebuilt lazily; persistence and cache reuse
-  are follow-up work.
+- GPU indexes are rebuilt lazily when a snapshot is not available; raw CAGRA
+  snapshots retain the graph, IDs, and vectors for direct GPU reload.
 - The explicit batch API rebuilds its CAGRA index per call.
 - GPU validation is manual because upstream CI has no compatible GPU runner.
 - Multi-GPU, long-duration, and snapshot-reload coverage are out of scope for
