@@ -10,6 +10,8 @@
 #endif
 #include <stdio.h>
 #include <stdlib.h>
+#include <stddef.h>
+#include <stdint.h>
 
 typedef struct {
   cuvsResources_t        res;
@@ -18,8 +20,21 @@ typedef struct {
   long n, dim;
 } sk_cuvs_index;
 
+/* Keep the public bridge contract defensive: callers pass signed dimensions
+ * while the device allocations use size_t.  Reject malformed requests before
+ * they reach either cuVS or the allocator. */
+static int bridge_request_ok(long rows, long dim, long probes, long topk)
+{
+  return rows > 0 && dim > 0 && probes > 0 && topk > 0 && topk <= rows
+      && (size_t)rows <= SIZE_MAX / (size_t)dim / sizeof(float)
+      && (size_t)probes <= SIZE_MAX / (size_t)dim / sizeof(float)
+      && (size_t)probes <= SIZE_MAX / (size_t)topk / sizeof(unsigned)
+      && (size_t)probes <= SIZE_MAX / (size_t)topk / sizeof(float);
+}
+
 void* seekdb_cuvs_build(const float* base, long n, long dim)
 {
+  if (base == NULL || !bridge_request_ok(n, dim, 1, 1)) return NULL;
   sk_cuvs_index* h = (sk_cuvs_index*)calloc(1, sizeof(*h));
   if (!h) return NULL;
   if (cuvsResourcesCreate(&h->res) != CUVS_SUCCESS) { free(h); return NULL; }
@@ -52,7 +67,7 @@ int seekdb_cuvs_search(void* handle, const float* query, long nq, long topk,
                        unsigned int* out_ids, float* out_dist)
 {
   sk_cuvs_index* h = (sk_cuvs_index*)handle;
-  if (!h) return 1;
+  if (!h || query == NULL || out_ids == NULL || !bridge_request_ok(h->n, h->dim, nq, topk)) return 1;
   int rc = 0;
   float* qd = 0; unsigned* nd = 0; float* dd = 0; cuvsCagraSearchParams_t sp = 0;
   if (cuvsRMMAlloc(h->res, (void**)&qd, sizeof(float)*nq*h->dim)  != CUVS_SUCCESS) { rc=10; goto done; }
@@ -72,6 +87,10 @@ int seekdb_cuvs_search(void* handle, const float* query, long nq, long topk,
       if (required_itopk < 512) required_itopk = 512;
       if (sp->itopk_size < required_itopk) sp->itopk_size = required_itopk;
       sp->search_width = 4;
+      /* MULTI_CTA maps one query to several cooperative blocks.  The V5 graph
+       * and candidate budget stay unchanged; only the search scheduler is
+       * selected here, so the serialized index format remains compatible. */
+      sp->algo = MULTI_CTA;
     }
     cuvsFilter f; f.type=NO_FILTER; f.addr=(uintptr_t)0;
     if (cuvsCagraSearch(h->res, sp, h->idx, &qt, &nt, &dt, f) != CUVS_SUCCESS) { rc=15; goto done; }
@@ -110,7 +129,7 @@ int seekdb_cuvs_serialize(void* handle, const char* filename)
 
 void* seekdb_cuvs_deserialize(const char* filename, long n, long dim)
 {
-  if (!filename || n <= 0 || dim <= 0) return NULL;
+  if (!filename || !bridge_request_ok(n, dim, 1, 1)) return NULL;
   sk_cuvs_index* index = (sk_cuvs_index*)calloc(1, sizeof(*index));
   if (!index) return NULL;
   if (cuvsResourcesCreate(&index->res) != CUVS_SUCCESS) goto fail;
