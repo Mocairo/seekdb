@@ -67,6 +67,7 @@ int ObTextTokenizer::open(const ObDatum &document, const ObCharsetInfo *cs)
 ObTextWhitespaceTokenizer::ObTextWhitespaceTokenizer()
   : ObTextTokenizer(),
     curr_token_ptr_(nullptr),
+    ctype_(nullptr),
     trav_pos_(0)
 {
 }
@@ -74,6 +75,7 @@ ObTextWhitespaceTokenizer::ObTextWhitespaceTokenizer()
 void ObTextWhitespaceTokenizer::reset()
 {
   curr_token_ptr_ = nullptr;
+  ctype_ = nullptr;
   trav_pos_ = 0;
   ObTextTokenizer::reset();
 }
@@ -82,6 +84,7 @@ int ObTextWhitespaceTokenizer::inner_open(const ObDatum &document, const ObChars
 {
   int ret = OB_SUCCESS;
   curr_token_ptr_ = nullptr;
+  ctype_ = nullptr == cs->ctype ? nullptr : cs->ctype + 1;
   trav_pos_ = 0;
   return ret;
 }
@@ -138,8 +141,7 @@ int ObTextWhitespaceTokenizer::get_next(ObDatum &next_token, int64_t &token_freq
 bool ObTextWhitespaceTokenizer::found_delimiter()
 {
   const char *curr_char = input_doc_->ptr_ + trav_pos_;
-  const unsigned char flags = nullptr == cs_->ctype
-      ? 0 : (cs_->ctype + 1)[static_cast<unsigned char>(*curr_char)];
+  const unsigned char flags = nullptr == ctype_ ? 0 : ctype_[static_cast<unsigned char>(*curr_char)];
   return 0 != (flags & (_MY_SPC | _MY_CTR | _MY_PNT));
 }
 

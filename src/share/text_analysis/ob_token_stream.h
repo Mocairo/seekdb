@@ -80,6 +80,7 @@ private:
   uint32_t get_input_buf_len() { return input_doc_->len_; }
 private:
   const char *curr_token_ptr_;
+  const unsigned char *ctype_;
   int64_t trav_pos_;
 };
 
