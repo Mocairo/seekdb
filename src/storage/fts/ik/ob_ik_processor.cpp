@@ -103,7 +103,7 @@ int TokenizeContext::current_char_type(ObFTCharUtil::CharType &type)
 int TokenizeContext::prepare_next_char()
 {
   int ret = OB_SUCCESS;
-  if (utf8mb4_) {
+  if (OB_LIKELY(utf8mb4_)) {
     const unsigned char *begin = reinterpret_cast<const unsigned char *>(fulltext_ + cursor_);
     const unsigned char *end = reinterpret_cast<const unsigned char *>(fulltext_ + fulltext_len_);
     ob_wc_t unicode = 0;

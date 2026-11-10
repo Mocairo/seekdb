@@ -16,6 +16,7 @@
 
 #define USING_LOG_PREFIX SHARE
 
+#include "lib/charset/ob_ctype.h"
 #include "share/text_analysis/ob_token_stream.h"
 #include "share/rc/ob_server_runtime.h"
 
@@ -136,10 +137,10 @@ int ObTextWhitespaceTokenizer::get_next(ObDatum &next_token, int64_t &token_freq
 
 bool ObTextWhitespaceTokenizer::found_delimiter()
 {
-  bool found = false;
   const char *curr_char = input_doc_->ptr_ + trav_pos_;
-  found = ob_isspace(cs_, *curr_char) || ob_iscntrl(cs_, *curr_char) || ob_ispunct(cs_, *curr_char);
-  return found;
+  const unsigned char flags = nullptr == cs_->ctype
+      ? 0 : (cs_->ctype + 1)[static_cast<unsigned char>(*curr_char)];
+  return 0 != (flags & (_MY_SPC | _MY_CTR | _MY_PNT));
 }
 
 ObTokenNormalizer::ObTokenNormalizer()
