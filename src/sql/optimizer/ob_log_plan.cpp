@@ -12251,45 +12251,6 @@ int ObLogPlan::prepare_text_retrieval_merge(const ObIArray<ObRawExpr *> &merge_m
   return ret;
 }
 
-static int check_match_score_used(const ObDMLStmt *stmt,
-                                  ObRawExpr *match_expr,
-                                  bool &need_calc)
-{
-  int ret = OB_SUCCESS;
-  need_calc = false;
-  if (OB_ISNULL(stmt) || OB_ISNULL(match_expr)) {
-    ret = OB_INVALID_ARGUMENT;
-  } else {
-    // A boolean comparison is observable outside WHERE. A standalone MATCH
-    // predicate only needs the matching document IDs.
-    ObSEArray<ObRawExpr *, 16> value_exprs;
-    ObStmtExprGetter visitor;
-    visitor.set_relation_scope();
-    visitor.remove_scope(SCOPE_WHERE);
-    if (OB_FAIL(stmt->get_relation_exprs(value_exprs, visitor))) {
-    }
-    for (int64_t i = 0; OB_SUCC(ret) && !need_calc && i < value_exprs.count(); ++i) {
-      if (OB_FAIL(ObRawExprUtils::find_expr(value_exprs.at(i), match_expr, need_calc))) {
-      }
-    }
-    const ObIArray<ObRawExpr *> &conditions = stmt->get_condition_exprs();
-    for (int64_t i = 0; OB_SUCC(ret) && !need_calc && i < conditions.count(); ++i) {
-      ObRawExpr *condition = conditions.at(i);
-      if (condition == match_expr) {
-        // The scan result already identifies matching documents.
-      } else if (OB_ISNULL(condition)) {
-        ret = OB_ERR_UNEXPECTED;
-      } else if (condition->get_expr_type() == T_OP_BOOL
-                 && condition->get_param_count() == 1
-                 && condition->get_param_expr(0) == match_expr) {
-        // The resolver's boolean wrapper is also a membership predicate.
-      } else if (OB_FAIL(ObRawExprUtils::find_expr(condition, match_expr, need_calc))) {
-      }
-    }
-  }
-  return ret;
-}
-
 int ObLogPlan::prepare_text_retrieval_info(const uint64_t ref_table_id,
                                            const uint64_t index_table_id,
                                            ObMatchFunRawExpr *match_against,
@@ -12306,7 +12267,8 @@ int ObLogPlan::prepare_text_retrieval_info(const uint64_t ref_table_id,
   uint64_t fwd_idx_tid = OB_INVALID_ID;
   uint64_t inv_idx_tid = OB_INVALID_ID;
   ObSEArray<ObAuxTableMetaInfo, 4> index_infos;
-  bool need_calc_relevance = false;
+  bool need_calc_relevance = true;
+  ObSEArray<ObExprConstraint, 2> constraints;
   uint64_t docid_col_id = OB_INVALID_ID;
   if (OB_ISNULL(match_against) || OB_ISNULL(get_stmt()) || OB_ISNULL(get_optimizer_context().get_query_ctx())) {
     ret = OB_INVALID_ARGUMENT;
@@ -12373,18 +12335,18 @@ int ObLogPlan::prepare_text_retrieval_info(const uint64_t ref_table_id,
     }
   }
   if (OB_SUCC(ret)) {
-    ObQueryCtx *query_ctx = get_optimizer_context().get_query_ctx();
-    bool score_used = false;
-    if (OB_ISNULL(query_ctx)) {
-      ret = OB_ERR_UNEXPECTED;
-    } else if (OB_FAIL(check_match_score_used(get_stmt(), match_against, score_used))) {
-      LOG_WARN("failed to check need calc match score, fallback to calc", K(ret));
-      need_calc_relevance = true;
-      ret = OB_SUCCESS;
-    } else {
-      // Boolean mode needs the match result to evaluate the predicate.
-      need_calc_relevance = score_used || BOOLEAN_MODE == match_against->get_mode_flag();
+    /*
+    if (OB_FAIL(ObTransformUtils::check_need_calc_match_score(get_optimizer_context().get_exec_ctx(),
+                                                              get_stmt(),
+                                                              match_against,
+                                                              need_calc_relevance,
+                                                              constraints))) {
+      LOG_WARN("failed to check need calc relevance", K(ret));
+    } else if (!need_calc_relevance &&
+               OB_FAIL(append_array_no_dup(get_optimizer_context().get_query_ctx()->all_expr_constraints_, constraints))) {
+      LOG_WARN("failed to append array no dup", K(ret));
     }
+    */
     tr_info.match_expr_ = match_against;
     tr_info.inv_idx_tid_ = inv_idx_tid;
     tr_info.fwd_idx_tid_ = fwd_idx_tid;
