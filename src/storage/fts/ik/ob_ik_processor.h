@@ -64,15 +64,15 @@ public:
 
   int step_next();
 
-  OB_INLINE ObCollationType collation() const { return coll_type_; }
-  OB_INLINE int64_t get_end_cursor() const { return cursor_ + next_char_len_; }
-  OB_INLINE const char *fulltext() const { return fulltext_; }
-  OB_INLINE int64_t fulltext_len() const { return fulltext_len_; }
-  OB_INLINE int64_t get_cursor() const { return cursor_; }
+  ObCollationType collation() const;
+  int64_t get_end_cursor() const;
+  const char *fulltext() const;
+  int64_t fulltext_len() const;
+  int64_t get_cursor() const;
 
-  OB_INLINE bool is_last() const { return cursor_ + next_char_len_ >= fulltext_len_; }
-  OB_INLINE bool iter_end() const { return cursor_ >= fulltext_len_; }
-  OB_INLINE bool is_smart() const { return is_smart_; }
+  bool is_last() const;
+  bool iter_end() const;
+  bool is_smart() const;
 
   int add_chain(ObIKTokenChain *chain);
   int add_token(const char *fulltext,
