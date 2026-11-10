@@ -111,8 +111,10 @@ int ObTextWhitespaceTokenizer::get_next(ObDatum &next_token, int64_t &token_freq
       curr_token_ptr_ = get_trav_ptr();
     }
 
-    // to next whitespace pos
-    while (OB_SUCC(ret) && !found_delimiter()) {
+    // Consume the first token character before checking the next delimiter.
+    // The leading loop already established that the current position is not a
+    // delimiter, so this avoids checking the same byte twice per token.
+    while (OB_SUCC(ret)) {
       const int64_t c_len = ob_mbcharlen_ptr(cs_, doc + trav_pos_, doc + doc_len);
       trav_pos_ += c_len;
       token_len += c_len;
@@ -121,6 +123,8 @@ int ObTextWhitespaceTokenizer::get_next(ObDatum &next_token, int64_t &token_freq
         if (0 == token_len) {
           ret = OB_ITER_END;
         }
+        break;
+      } else if (found_delimiter()) {
         break;
       }
     }
