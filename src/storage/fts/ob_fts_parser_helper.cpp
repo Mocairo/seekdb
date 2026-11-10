@@ -224,6 +224,30 @@ int ObFTParseData::init_dict_hub()
   return ret;
 }
 
+int ObFTParseData::preload_builtin_dicts()
+{
+  int ret = OB_SUCCESS;
+  if (!is_inited_ || OB_ISNULL(dict_hub_)) {
+    ret = OB_NOT_INIT;
+  } else {
+    const ObFTDictType dict_types[] = {
+        ObFTDictType::DICT_IK_MAIN,
+        ObFTDictType::DICT_IK_QUAN,
+        ObFTDictType::DICT_IK_STOP,
+    };
+    for (const ObFTDictType type : dict_types) {
+      const ObIFTDict *dict = nullptr;
+      if (OB_FAIL(dict_hub_->get_builtin_dict(type, dict))) {
+        break;
+      } else if (OB_ISNULL(dict)) {
+        ret = OB_ERR_UNEXPECTED;
+        break;
+      }
+    }
+  }
+  return ret;
+}
+
 void ObFTParseData::destroy()
 {
   if (OB_NOT_NULL(stop_word_checker_)) {

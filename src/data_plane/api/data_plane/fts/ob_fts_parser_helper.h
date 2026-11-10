@@ -114,6 +114,7 @@ public:
 
   int init();
   void destroy();
+  int preload_builtin_dicts();
 
 public:
   ObStopWordChecker *stop_word_checker() const { return stop_word_checker_; }

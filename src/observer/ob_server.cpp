@@ -873,6 +873,13 @@ int ObServer::init(const ObServerOptions &opts, const ObPLogWriterCfg &log_cfg)
     } else {
       // All process-owned services are now bound into the server runtime.
     }
+    if (OB_SUCC(ret)) {
+      const int preload_ret = ObFTParseData::instance().preload_builtin_dicts();
+      if (OB_SUCCESS != preload_ret) {
+        // Keep the original lazy path available if startup cache warming fails.
+        LOG_WARN("preload fulltext dictionaries failed", K(preload_ret));
+      }
+    }
   }
   }
 
