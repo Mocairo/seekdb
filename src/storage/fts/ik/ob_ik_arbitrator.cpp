@@ -32,6 +32,38 @@ namespace oceanbase
 {
 namespace storage
 {
+namespace
+{
+// The tokenizer already uses this decoder/classifier pair for UTF8MB4.  Keep
+// the same fallback for malformed bytes and non-UTF8 collations while avoiding
+// a second well_formed_len/decode pass in arbitrator output.
+int decode_and_classify_first_char(const ObCollationType coll_type,
+                                   const bool utf8mb4,
+                                   const char *input,
+                                   const int64_t input_len,
+                                   int64_t &char_len,
+                                   ObFTCharUtil::CharType &type)
+{
+  int ret = OB_SUCCESS;
+  if (utf8mb4) {
+    const unsigned char *begin = reinterpret_cast<const unsigned char *>(input);
+    const unsigned char *end = begin + input_len;
+    ob_wc_t unicode = 0;
+    const int length = common::ob_charset_decode_unicode<CHARSET_UTF8MB4>(begin, end, unicode);
+    if (length > 0) {
+      char_len = length;
+      type = ObFTCharUtil::classify_unicode<CHARSET_UTF8MB4>(unicode);
+      return OB_SUCCESS;
+    }
+  }
+
+  if (OB_FAIL(ObCharset::first_valid_char(coll_type, input, input_len, char_len))) {
+  } else if (OB_FAIL(ObFTCharUtil::classify_first_char(coll_type, input, char_len, type))) {
+  }
+  return ret;
+}
+} // namespace
+
 int ObIKArbitrator::process(TokenizeContext &ctx)
 {
   int ret = OB_SUCCESS;
@@ -113,17 +145,16 @@ int ObIKArbitrator::output_result(TokenizeContext &ctx)
 
   int64_t char_len = 0;
   ObIKTokenChain *chain = nullptr;
+  const bool utf8mb4 = CHARSET_UTF8MB4 == ObCharset::charset_type_by_coll(ctx.collation());
   for (int64_t current = 0; OB_SUCC(ret) && current < ctx.fulltext_len();) {
     ObFTCharUtil::CharType type;
     // maybe not so good to keep single, check it later
-    if (OB_FAIL(ObCharset::first_valid_char(ctx.collation(),
-                                            ctx.fulltext() + current,
-                                            ctx.fulltext_len() - current,
-                                            char_len))) {
-    } else if (OB_FAIL(ObFTCharUtil::classify_first_char(ctx.collation(),
-                                                         ctx.fulltext() + current,
-                                                         char_len,
-                                                         type))) {
+    if (OB_FAIL(decode_and_classify_first_char(ctx.collation(),
+                                               utf8mb4,
+                                               ctx.fulltext() + current,
+                                               ctx.fulltext_len() - current,
+                                               char_len,
+                                               type))) {
     } else if (ObFTCharUtil::CharType::USELESS == type) {
       current += char_len; // skip useless char
     } else if (OB_FAIL(chains_.get_refactored(current, chain)) && OB_HASH_NOT_EXIST != ret) {
