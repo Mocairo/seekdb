@@ -148,7 +148,7 @@ int ObAddWord::process_word(
   } else if (is_min_max_word(char_cnt)) {
     ++min_max_word_cnt_;
   } else if (OB_FAIL(casedown_word(src_word, dst_word))) {
-  } else if (OB_FAIL(check_stopword(dst_word, is_stopword))) {
+  } else if (flag_.stopword() && OB_FAIL(check_stopword(dst_word, is_stopword))) {
   } else if (OB_UNLIKELY(is_stopword)) {
     ++stopword_cnt_;
   } else if (OB_FAIL(groupby_word(dst_word, word_freq))) {
