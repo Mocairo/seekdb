@@ -261,22 +261,15 @@ int ObBasicEnglishNormalizer::get_next(ObDatum &next_token, int64_t &token_freq)
         const char *token = tmp_datum.ptr_;
         const uint32_t raw_token_len = tmp_datum.len_;
         uint32_t first_alnum_pos = 0;
-        uint32_t last_alnum_pos = raw_token_len - 1;
+        uint32_t last_alnum_pos = 0;
         for (uint32_t i = 0; i < raw_token_len; ++i) {
           const char *character = token + i;
           if (ob_isalnum(cs_, *character)) {
-            first_alnum_pos = i;
-            found_alnum = true;
-            break;
-          }
-        }
-
-        for (int32_t i = raw_token_len - 1; 0 <= i && i < raw_token_len && i >= first_alnum_pos; --i) {
-          const char *character = token + i;
-          if (ob_isalnum(cs_, *character)) {
+            if (!found_alnum) {
+              first_alnum_pos = i;
+            }
             last_alnum_pos = i;
             found_alnum = true;
-            break;
           }
         }
 
