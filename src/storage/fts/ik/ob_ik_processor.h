@@ -47,6 +47,20 @@ public:
 
   int current_char(const char *&ch, uint8_t &char_len);
   int current_char_type(ObFTCharUtil::CharType &type);
+  OB_INLINE int current_char_info(const char *&ch,
+                                  uint8_t &char_len,
+                                  ObFTCharUtil::CharType &type)
+  {
+    int ret = OB_SUCCESS;
+    if (cursor_ >= fulltext_len_) {
+      ret = OB_ITER_END;
+    } else {
+      ch = fulltext_ + cursor_;
+      char_len = next_char_len_;
+      type = next_char_type_;
+    }
+    return ret;
+  }
 
   int step_next();
 

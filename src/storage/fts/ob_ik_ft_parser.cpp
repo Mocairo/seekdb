@@ -174,8 +174,7 @@ int ObIKFTParser::process_next_batch()
       const char *ch;
       uint8_t char_len = 0;
       ObFTCharUtil::CharType type = ObFTCharUtil::CharType::USELESS;
-      if (OB_FAIL(ctx_->current_char(ch, char_len))) {
-      } else if (OB_FAIL(ctx_->current_char_type(type))) {
+      if (OB_FAIL(ctx_->current_char_info(ch, char_len, type))) {
       } else if (OB_FAIL(process_one_char(*ctx_, ch, char_len, type))) {
       } else {
         // 1. check segmention
