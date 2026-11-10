@@ -105,19 +105,11 @@ int ObIKFTParser::get_next_token(const char *&word,
         } else {
         }
       } else {
-        bool is_stop = false;
-        // if (!OB_ISNULL(dict_stop_)
-        //     && OB_FAIL(dict_stop_->match(ObString(len, output_word + offset), is_stop))) {
-        //   LOG_WARN("Failed to match stopwords", K(ret));
-        // } else
-        if (!is_stop) {
-          word = output_word + offset;
-          word_len = len;
-          char_cnt = cnt;
-          word_freq = 1;
-          accept_token = true;
-        } else {
-        }
+        word = output_word + offset;
+        word_len = len;
+        char_cnt = cnt;
+        word_freq = 1;
+        accept_token = true;
       }
     }
   }
