@@ -208,14 +208,16 @@ int ObTokenStopWordNormalizer::filter_special_marks(const ObDatum &check_token, 
   int ret = OB_SUCCESS;
   const int64_t token_len = check_token.len_;
   const char *token = check_token.ptr_;
-  int64_t special_mark_cnt = 0;
+  bool has_non_special = false;
   for (int64_t i = 0; i < token_len; ++i) {
-    const char *character = token + i;
-    if (ob_ispunct(cs_, *character) || ob_iscntrl(cs_, *character)) {
-      special_mark_cnt++;
+    const unsigned char flags = nullptr == cs_->ctype
+        ? 0 : (cs_->ctype + 1)[static_cast<unsigned char>(token[i])];
+    if (0 == (flags & (_MY_PNT | _MY_CTR))) {
+      has_non_special = true;
+      break;
     }
   }
-  is_valid = !(special_mark_cnt == token_len);
+  is_valid = has_non_special;
   return ret;
 }
 
